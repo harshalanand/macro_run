@@ -89,6 +89,9 @@ def _run_job(jid):
                 try:
                     # 1. Paste category value into target cell of the macro file
                     excel_path = os.path.join(date_folder, excel_file)
+                    D.add_log(jid, qid, mid, "INFO", "MACRO_PREP",
+                              f"{mname}: opening '{excel_path}' cell={target_cell} value='{cat}'")
+
                     if not os.path.exists(excel_path):
                         raise FileNotFoundError(f"Macro file missing: {excel_path}")
 
@@ -231,38 +234,71 @@ def _net_use(unc_path, username, password, jid=None, mid=None):
 
 def _paste_and_run(excel_path, macro_name, target_cell, cat_value, timeout=600):
     """Open Excel, paste category value into target cell, run macro, save and close."""
-    excel_path = os.path.abspath(excel_path)
-    vbs_path = os.path.join(os.path.dirname(excel_path), f"_run_{os.getpid()}.vbs")
+    import tempfile
+
+    # DON'T use os.path.abspath — it mangles UNC paths like \\server\share
+    # Keep the path exactly as constructed from shared_folder + date + filename
+    # Replace any forward slashes just in case
+    excel_path = excel_path.replace("/", "\\")
+
+    # Write VBS to LOCAL temp dir — cscript can't always run scripts from network shares
+    vbs_dir = tempfile.gettempdir()
+    vbs_path = os.path.join(vbs_dir, f"_macro_{os.getpid()}_{id(cat_value)}.vbs")
+
+    # Escape single quotes in cat_value for VBS string safety
+    safe_cat = str(cat_value).replace('"', '""')
 
     vbs = f'''
 Dim xlApp, xlWb, xlWs
+Dim filePath
+filePath = "{excel_path}"
+
+WScript.Echo "OPENING: " & filePath
+
+' Check if file exists
+Dim fso
+Set fso = CreateObject("Scripting.FileSystemObject")
+If Not fso.FileExists(filePath) Then
+    WScript.Echo "ERROR_OPEN:File not found: " & filePath
+    WScript.Quit 1
+End If
+Set fso = Nothing
+
+On Error Resume Next
 Set xlApp = CreateObject("Excel.Application")
+If Err.Number <> 0 Then
+    WScript.Echo "ERROR_OPEN:Cannot create Excel: " & Err.Description
+    WScript.Quit 1
+End If
+
 xlApp.Visible = False
 xlApp.DisplayAlerts = False
 xlApp.AskToUpdateLinks = False
+Err.Clear
 
-On Error Resume Next
-Set xlWb = xlApp.Workbooks.Open("{excel_path}")
+Set xlWb = xlApp.Workbooks.Open(filePath)
 If Err.Number <> 0 Then
-    WScript.Echo "ERROR_OPEN:" & Err.Description
-    xlApp.Quit: WScript.Quit 1
+    WScript.Echo "ERROR_OPEN:" & Err.Description & " | Path=" & filePath
+    xlApp.Quit: Set xlApp = Nothing: WScript.Quit 1
 End If
 Err.Clear
 
 ' Paste category value into target cell
 Set xlWs = xlWb.Sheets(1)
-xlWs.Range("{target_cell}").Value = "{cat_value}"
+xlWs.Range("{target_cell}").Value = "{safe_cat}"
 If Err.Number <> 0 Then
     WScript.Echo "ERROR_PASTE:" & Err.Description
-    xlWb.Close False: xlApp.Quit: WScript.Quit 3
+    xlWb.Close False: xlApp.Quit: Set xlApp = Nothing: WScript.Quit 3
 End If
 Err.Clear
+
+WScript.Echo "RUNNING_MACRO: {macro_name}"
 
 ' Run macro
 xlApp.Run "{macro_name}"
 If Err.Number <> 0 Then
     WScript.Echo "ERROR_MACRO:" & Err.Description
-    xlWb.Close False: xlApp.Quit: WScript.Quit 2
+    xlWb.Close False: xlApp.Quit: Set xlApp = Nothing: WScript.Quit 2
 End If
 
 xlWb.Save
@@ -278,8 +314,9 @@ WScript.Quit 0
         r = subprocess.run(["cscript", "//NoLogo", vbs_path],
                            capture_output=True, text=True, timeout=timeout)
         out = r.stdout.strip()
+        err = r.stderr.strip()
         if r.returncode != 0 or "ERROR" in out:
-            raise RuntimeError(f"exit={r.returncode}: {out} {r.stderr.strip()}")
+            raise RuntimeError(f"exit={r.returncode}: {out} {err}")
         return out
     finally:
         try: os.remove(vbs_path)
