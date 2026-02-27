@@ -104,6 +104,16 @@ async def toggle_machine(mid: int):
     D.toggle_machine(mid)
     return RedirectResponse(f"/groups/{m['group_id']}" if m else "/groups", 303)
 
+@app.post("/api/machines/{mid}/edit")
+async def edit_machine(mid: int, machine_name:str=Form(...), system_name:str=Form(""),
+    ip_address:str=Form(""), shared_folder:str=Form(...), username:str=Form(""),
+    password:str=Form(""), department:str=Form(""), location:str=Form("")):
+    m = D.get_machine(mid)
+    D.update_machine(mid, machine_name=machine_name, system_name=system_name,
+        ip_address=ip_address, shared_folder=shared_folder, username=username,
+        password=password, department=department, location=location)
+    return RedirectResponse(f"/groups/{m['group_id']}" if m else "/groups", 303)
+
 @app.post("/api/groups/{gid}/import-machines")
 async def import_machines(gid: int, file: UploadFile = File(...)):
     content = (await file.read()).decode("utf-8-sig")
@@ -164,6 +174,17 @@ async def del_cat(cid: int):
         r = c.execute("SELECT group_id FROM categories WHERE cat_id=?", (cid,)).fetchone()
     D.delete_category(cid)
     return RedirectResponse(f"/groups/{r['group_id']}" if r else "/groups", 303)
+
+@app.post("/api/groups/{gid}/clear-categories")
+async def clear_cats(gid: int):
+    D.delete_all_categories(gid)
+    return RedirectResponse(f"/groups/{gid}", 303)
+
+@app.get("/api/machines/{mid}")
+async def get_machine_json(mid: int):
+    m = D.get_machine(mid)
+    if not m: raise HTTPException(404)
+    return JSONResponse({k: m[k] for k in m.keys()})
 
 @app.post("/api/groups/{gid}/import-categories")
 async def import_cats(gid: int, file: UploadFile = File(...)):

@@ -193,6 +193,7 @@ textarea{resize:vertical;min-height:60px}
 <div class="card">
 <div class="fx mb" style="justify-content:space-between"><h3 style="margin:0">Categories / Maj No ({{cats|length}})</h3>
 <div class="fx">
+{% if cats %}<form method="post" action="/api/groups/{{g.group_id}}/clear-categories" style="display:inline"><button class="btn btn-r btn-s" onclick="return confirm('Delete ALL {{cats|length}} categories?')">Clear All</button></form>{% endif %}
 <a href="/api/templates/categories.csv" class="btn btn-o btn-s">Template CSV</a>
 <button class="btn btn-o btn-s" onclick="$('importCatMo').classList.add('show')">Import CSV</button>
 </div></div>
@@ -212,7 +213,7 @@ textarea{resize:vertical;min-height:60px}
 <button class="btn btn-o btn-s" onclick="$('importMo').classList.add('show')">Import CSV</button>
 <button class="btn btn-o btn-s" onclick="$('machMo').classList.add('show')">+ Add</button>
 </div></div>
-{% if machines %}<table><tr><th>Name</th><th>System</th><th>IP</th><th>Folder</th><th>User</th><th>Auth</th><th>Status</th><th></th></tr>
+{% if machines %}<table><tr><th>Name</th><th>System</th><th>IP</th><th>Folder</th><th>User</th><th>Auth</th><th>Status</th><th>Actions</th></tr>
 {% for m in machines %}<tr style="{% if not m.is_active %}opacity:.45{% endif %}">
 <td style="font-weight:600">{{m.machine_name}}</td>
 <td class="mono">{{m.system_name or '-'}}</td>
@@ -221,9 +222,10 @@ textarea{resize:vertical;min-height:60px}
 <td>{{m.username or '-'}}</td>
 <td>{% if m.password %}<span class="badge b-ok">Yes</span>{% else %}<span class="badge b-gray">No</span>{% endif %}</td>
 <td>{% if m.is_active %}<span class="badge b-ok">On</span>{% else %}<span class="badge b-gray">Off</span>{% endif %}</td>
-<td class="fx">
+<td class="fx" style="gap:3px">
+<button class="btn btn-o btn-s" onclick="editMachine({{m.machine_id}})">Edit</button>
 <form method="post" action="/api/machines/{{m.machine_id}}/toggle" style="display:inline"><button class="btn btn-o btn-s">{{'Off' if m.is_active else 'On'}}</button></form>
-<form method="post" action="/api/machines/{{m.machine_id}}/delete" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Remove?')">Del</button></form>
+<form method="post" action="/api/machines/{{m.machine_id}}/delete" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Delete machine {{m.machine_name}}?')">Del</button></form>
 </td></tr>{% endfor %}</table>{% else %}<div class="empty">No machines. Add or import from CSV.</div>{% endif %}</div>
 
 {# Jobs for this group #}
@@ -258,9 +260,19 @@ textarea{resize:vertical;min-height:60px}
 
 <div class="mo-bg" id="importCatMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Import Categories CSV</h3>
 <form method="post" action="/api/groups/{{g.group_id}}/import-categories" enctype="multipart/form-data">
-<p style="font-size:11px;color:var(--tx3);margin-bottom:10px">One value per row, or CSV with header <code>cat_value</code>. <a href="/api/templates/categories.csv">Download template</a></p>
+<p style="font-size:11px;color:var(--tx3);margin-bottom:10px">One value per row, or CSV with header <code>cat_value</code>. Headers are auto-skipped. <a href="/api/templates/categories.csv">Download template</a></p>
 <div class="fg mb"><input type="file" name="file" accept=".csv,.txt" required></div>
 <div class="fx" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Import</button></div></form></div></div>
+
+{# Edit Machine Modal #}
+<div class="mo-bg" id="editMachMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Edit Machine</h3>
+<form method="post" id="editMachForm">
+<div class="fr"><div class="fg"><label>Machine Name *</label><input type="text" name="machine_name" id="em_name" required></div><div class="fg"><label>System/Hostname</label><input type="text" name="system_name" id="em_sys"></div></div>
+<div class="fr"><div class="fg"><label>IP Address</label><input type="text" name="ip_address" id="em_ip"></div><div class="fg"><label>Shared Folder *</label><input type="text" name="shared_folder" id="em_folder" required></div></div>
+<div class="fr"><div class="fg"><label>Login Username</label><input type="text" name="username" id="em_user"></div><div class="fg"><label>Login Password</label><input type="text" name="password" id="em_pass" placeholder="Leave empty to keep current"></div></div>
+<div class="fr"><div class="fg"><label>Department</label><input type="text" name="department" id="em_dept"></div><div class="fg"><label>Location</label><input type="text" name="location" id="em_loc"></div></div>
+<div class="fx mt" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Save</button></div>
+</form></div></div>
 
 {# ═══════════ JOBS LIST ═══════════ #}
 {% elif page=='jobs' %}
@@ -378,6 +390,22 @@ async function testEmail(){
     t.textContent=d.success?'Test email sent!':'Failed: '+d.message;
   }catch(e){t.className='toast fail';t.textContent='Error: '+e.message}
   setTimeout(()=>{t.style.display='none'},5000);
+}
+async function editMachine(mid){
+  try{
+    const r=await fetch('/api/machines/'+mid);
+    const m=await r.json();
+    $('em_name').value=m.machine_name||'';
+    $('em_sys').value=m.system_name||'';
+    $('em_ip').value=m.ip_address||'';
+    $('em_folder').value=m.shared_folder||'';
+    $('em_user').value=m.username||'';
+    $('em_pass').value='';
+    $('em_dept').value=m.department||'';
+    $('em_loc').value=m.location||'';
+    $('editMachForm').action='/api/machines/'+mid+'/edit';
+    $('editMachMo').classList.add('show');
+  }catch(e){alert('Error loading machine: '+e.message)}
 }
 </script>
 </body>
