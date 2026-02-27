@@ -201,21 +201,27 @@ def delete_group(gid):
                 if r["stored_path"] and os.path.exists(r["stored_path"]):
                     os.remove(r["stored_path"])
             except: pass
-        # manual cascade for safety
-        c.execute("DELETE FROM categories WHERE group_id=?", (gid,))
-        c.execute("DELETE FROM group_files WHERE group_id=?", (gid,))
-        mids = [r["machine_id"] for r in c.execute("SELECT machine_id FROM machines WHERE group_id=?", (gid,)).fetchall()]
-        if mids:
-            ph = ",".join("?" * len(mids))
-            c.execute(f"DELETE FROM job_queue WHERE machine_id IN ({ph})", mids)
-        c.execute("DELETE FROM machines WHERE group_id=?", (gid,))
+
+        # 1. Get all job IDs for this group
         jids = [r["job_id"] for r in c.execute("SELECT job_id FROM jobs WHERE group_id=?", (gid,)).fetchall()]
         if jids:
             ph = ",".join("?" * len(jids))
+            # Delete job_queue FIRST (has FK to categories + machines)
             c.execute(f"DELETE FROM job_queue WHERE job_id IN ({ph})", jids)
             c.execute(f"DELETE FROM run_logs WHERE job_id IN ({ph})", jids)
             c.execute(f"DELETE FROM email_log WHERE job_id IN ({ph})", jids)
         c.execute("DELETE FROM jobs WHERE group_id=?", (gid,))
+
+        # 2. Now safe to delete categories (no more FK refs from job_queue)
+        c.execute("DELETE FROM categories WHERE group_id=?", (gid,))
+
+        # 3. Delete machines
+        c.execute("DELETE FROM machines WHERE group_id=?", (gid,))
+
+        # 4. Delete files
+        c.execute("DELETE FROM group_files WHERE group_id=?", (gid,))
+
+        # 5. Finally delete the group
         c.execute("DELETE FROM machine_groups WHERE group_id=?", (gid,))
 
 # ── MACHINES ────────────────────────────────────────────
