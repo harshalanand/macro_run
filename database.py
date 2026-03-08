@@ -1,5 +1,5 @@
 """
-Database layer — SQLite with groups, machines, categories queue, jobs, audit logs.
+Database layer -- SQLite with groups, machines, categories queue, jobs, audit logs.
 """
 import sqlite3, json, os
 from datetime import datetime

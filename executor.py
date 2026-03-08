@@ -1,5 +1,5 @@
 """
-Executor v5 — REMOTE execution on target machines.
+Executor v5 - REMOTE execution on target machines.
 
 Flow per category:
 1. Files already on remote machine (from prep phase)
@@ -20,8 +20,8 @@ import database as D
 import notifier as N
 
 COMPILED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compiled_output")
-_running_jobs = {}   # jid → True
-_kill_jobs = {}      # jid → True (signals stop)
+_running_jobs = {}   # jid -> True
+_kill_jobs = {}      # jid -> True (signals stop)
 
 def is_running(jid): return _running_jobs.get(jid, False)
 
@@ -149,7 +149,7 @@ def _run_job(jid):
                         raise RuntimeError(f"Macro error: {result_text}")
 
                     D.add_log(jid, qid, mid, "INFO", "MACRO_DONE",
-                              f"{mname}: '{cat}' → {result_text[:100]}")
+                              f"{mname}: '{cat}' -> {result_text[:100]}")
 
                     # 5. Collect output files
                     _collect_output(remote_date_folder, files, compile_dir,
@@ -225,7 +225,7 @@ def _run_job(jid):
 # ══════════════════════════════════════════════════════════════════════
 
 def _prep_machine(machine, today, files, jid):
-    """Auth → create folder → copy files in parallel. Returns remote date_folder."""
+    """Auth -> create folder -> copy files in parallel. Returns remote date_folder."""
     shared = machine["shared_folder"].strip()
     system_name = (machine["system_name"] or "").strip()
     username = (machine["username"] or "").strip()
@@ -303,7 +303,7 @@ def _make_vbs(excel_file, macro_name, target_cell, cat_value, result_filename):
     Generate VBScript that:
     - Finds its own folder (works from UNC or local path)
     - Opens the Excel file FROM THAT FOLDER
-    - Pastes category → runs macro → saves
+    - Pastes category -> runs macro -> saves
     - Writes result to file
     """
     return f'''On Error Resume Next
@@ -401,7 +401,7 @@ def _execute_remote(vbs_path, hostname, username, password, method, psexec_path,
                     jid, qid, mid, mname):
     """
     Execute VBS on the remote machine. Tries multiple methods.
-    Does NOT wait for completion — caller polls result file.
+    Does NOT wait for completion -- caller polls result file.
     """
     vbs_path_win = vbs_path.replace("/", "\\")
 
@@ -415,7 +415,7 @@ def _execute_remote(vbs_path, hostname, username, password, method, psexec_path,
 
     if not hostname:
         D.add_log(jid, qid, mid, "WARN", "EXEC",
-                  "No hostname/IP — falling back to local execution")
+                  "No hostname/IP -- falling back to local execution")
         subprocess.Popen(["cscript", "//NoLogo", vbs_path_win],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return
@@ -446,7 +446,7 @@ def _execute_remote(vbs_path, hostname, username, password, method, psexec_path,
             return
         errors.append("schtasks failed")
 
-    # All failed — try local as last resort
+    # All failed -- try local as last resort
     D.add_log(jid, qid, mid, "WARN", "EXEC_FALLBACK",
               f"Remote exec failed ({'; '.join(errors)}). Trying local cscript...")
     subprocess.Popen(["cscript", "//NoLogo", vbs_path_win],
@@ -464,7 +464,7 @@ def _try_psexec(vbs_path, hostname, username, password, psexec_path,
     cmd += ["cscript", "//NoLogo", vbs_path]
 
     D.add_log(jid, qid, mid, "INFO", "EXEC_PSEXEC",
-              f"PsExec → {hostname}: {' '.join(cmd[:6])}...")
+              f"PsExec -> {hostname}: {' '.join(cmd[:6])}...")
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if r.returncode in (0, -1):  # -1 = psexec background mode
@@ -491,7 +491,7 @@ def _try_wmic(vbs_path, hostname, username, password, jid, qid, mid, mname):
     cmd += ["process", "call", "create", wmic_cmd]
 
     D.add_log(jid, qid, mid, "INFO", "EXEC_WMIC",
-              f"wmic → {hostname}: process call create cscript...")
+              f"wmic -> {hostname}: process call create cscript...")
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         out = (r.stdout + r.stderr).strip()
@@ -517,7 +517,7 @@ def _try_schtasks(vbs_path, hostname, username, password, qid, jid, mid, mname):
             create_cmd += ["/rp", password]
 
     D.add_log(jid, qid, mid, "INFO", "EXEC_SCHTASKS",
-              f"schtasks → {hostname}: creating task {task_name}")
+              f"schtasks -> {hostname}: creating task {task_name}")
     try:
         r = subprocess.run(create_cmd, capture_output=True, text=True, timeout=15)
         if r.returncode != 0:

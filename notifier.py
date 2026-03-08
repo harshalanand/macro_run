@@ -1,5 +1,5 @@
 """
-Email notifications — SMTP alerts with test support.
+Email notifications -- SMTP alerts with test support.
 """
 import smtplib, ssl
 from email.mime.text import MIMEText
