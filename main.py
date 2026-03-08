@@ -1,5 +1,5 @@
 """
-FastAPI — Macro Orchestrator with queue-based execution, CSV templates, test mail.
+FastAPI -- Macro Orchestrator with queue-based execution, CSV templates, test mail.
 """
 import os, io, csv, json, shutil
 from datetime import datetime
