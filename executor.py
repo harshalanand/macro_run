@@ -314,17 +314,20 @@ def _net_use(unc_path, username, password, jid=None, mid=None):
 def _make_vbs(excel_file, macro_name, target_cell, cat_value, result_filename):
     """
     VBS that:
-    1. Finds its own folder (works from UNC or local)
-    2. Opens Excel from THAT folder
-    3. Pastes category -> runs macro -> saves
-    4. Writes result file in same folder
+    1. Finds its own folder
+    2. If UNC path -> maps a temp drive letter (Excel COM cant open UNC)
+    3. Opens Excel from mapped drive or local path
+    4. Pastes category -> runs macro -> saves
+    5. Writes result file, unmaps drive
     """
     return f'''On Error Resume Next
 
-Dim fso, scriptFolder, excelPath, resultFile
+Dim fso, scriptFolder, workFolder, excelPath, resultFile, mappedDrive
 Set fso = CreateObject("Scripting.FileSystemObject")
-scriptFolder = fso.GetParentFolderName(WScript.ScriptFullName) & "\\"
-excelPath = scriptFolder & "{excel_file}"
+scriptFolder = fso.GetParentFolderName(WScript.ScriptFullName)
+If Right(scriptFolder, 1) <> "\\" Then scriptFolder = scriptFolder & "\\"
+
+' Result file always via original path (for polling from server)
 resultFile = scriptFolder & "{result_filename}"
 
 ' Mark as running
@@ -333,15 +336,46 @@ Set rf = fso.CreateTextFile(resultFile, True)
 rf.Write "RUNNING"
 rf.Close
 
+' If UNC path, map a drive letter (Excel COM cannot open UNC paths)
+workFolder = scriptFolder
+mappedDrive = ""
+
+If Left(scriptFolder, 2) = "\\\\" Then
+    ' Find a free drive letter (Z down to M)
+    Dim dl, letters
+    letters = Array("Z","Y","X","W","V","U","T","S","R","Q","P","O","N","M")
+    Dim wshNetwork
+    Set wshNetwork = CreateObject("WScript.Network")
+    Dim wshShell
+    Set wshShell = CreateObject("WScript.Shell")
+
+    For Each dl In letters
+        If Not fso.DriveExists(dl & ":") Then
+            ' Map this drive to the UNC folder
+            Dim mapCmd
+            mapCmd = "net use " & dl & ": """ & Left(scriptFolder, Len(scriptFolder)-1) & """ /persistent:no"
+            wshShell.Run "cmd /c " & mapCmd, 0, True
+            WScript.Sleep 500
+
+            If fso.DriveExists(dl & ":") Then
+                mappedDrive = dl & ":"
+                workFolder = mappedDrive & "\\"
+                Exit For
+            End If
+        End If
+    Next
+End If
+
+excelPath = workFolder & "{excel_file}"
+
 ' Check file exists
 If Not fso.FileExists(excelPath) Then
     Set rf = fso.CreateTextFile(resultFile, True)
     rf.Write "ERROR_OPEN:File not found: " & excelPath
     rf.Close
-    WScript.Quit 1
+    GoTo Cleanup
 End If
 
-' Kill any orphan Excel processes (clean slate)
 ' Start Excel
 Dim xlApp
 Set xlApp = CreateObject("Excel.Application")
@@ -349,7 +383,7 @@ If Err.Number <> 0 Then
     Set rf = fso.CreateTextFile(resultFile, True)
     rf.Write "ERROR_OPEN:Cannot start Excel: " & Err.Description
     rf.Close
-    WScript.Quit 1
+    GoTo Cleanup
 End If
 
 xlApp.Visible = False
@@ -358,15 +392,15 @@ xlApp.AskToUpdateLinks = False
 xlApp.EnableEvents = False
 Err.Clear
 
-' Open workbook
+' Open workbook from local/mapped path
 Dim xlWb
 Set xlWb = xlApp.Workbooks.Open(excelPath, 0, False)
 If Err.Number <> 0 Then
     Set rf = fso.CreateTextFile(resultFile, True)
-    rf.Write "ERROR_OPEN:" & Err.Number & ":" & Err.Description
+    rf.Write "ERROR_OPEN:" & Err.Number & ":" & Err.Description & " Path=" & excelPath
     rf.Close
     xlApp.Quit: Set xlApp = Nothing
-    WScript.Quit 1
+    GoTo Cleanup
 End If
 Err.Clear
 
@@ -377,7 +411,7 @@ If Err.Number <> 0 Then
     rf.Write "ERROR_PASTE:" & Err.Number & ":" & Err.Description
     rf.Close
     xlWb.Close False: xlApp.Quit: Set xlApp = Nothing
-    WScript.Quit 3
+    GoTo Cleanup
 End If
 Err.Clear
 
@@ -388,7 +422,7 @@ If Err.Number <> 0 Then
     rf.Write "ERROR_MACRO:" & Err.Number & ":" & Err.Description
     rf.Close
     xlWb.Close False: xlApp.Quit: Set xlApp = Nothing
-    WScript.Quit 2
+    GoTo Cleanup
 End If
 
 ' Save and close
@@ -401,6 +435,16 @@ Set xlApp = Nothing
 Set rf = fso.CreateTextFile(resultFile, True)
 rf.Write "SUCCESS"
 rf.Close
+
+Cleanup:
+' Unmap drive if we mapped one
+If mappedDrive <> "" Then
+    Dim unmapCmd
+    Set wshShell = CreateObject("WScript.Shell")
+    unmapCmd = "net use " & mappedDrive & " /delete /y"
+    wshShell.Run "cmd /c " & unmapCmd, 0, True
+End If
+
 WScript.Quit 0
 '''
 
@@ -410,29 +454,47 @@ WScript.Quit 0
 # =====================================================================
 
 def _execute_vbs(vbs_path, hostname, username, password, jid, qid, mid, mname):
-    """Execute VBS. Try wmic for remote, fall back to local cscript."""
+    """Execute VBS. Detect local machine, try wmic for remote, fall back to cscript."""
     vbs_win = vbs_path.replace("/", "\\")
 
-    # If hostname available, try remote execution first
+    # Check if target is the LOCAL machine
+    is_local = False
     if hostname:
-        # Try wmic
-        ok = _try_wmic(vbs_win, hostname, username, password, jid, qid, mid, mname)
-        if ok:
-            return
+        import socket
+        local_names = {
+            socket.gethostname().lower(),
+            "localhost", "127.0.0.1", "."
+        }
+        try:
+            local_names.add(socket.getfqdn().lower())
+        except: pass
+        is_local = hostname.lower() in local_names
 
-        # Try psexec
-        psexec_path = D.get_setting("psexec_path", "psexec")
-        ok = _try_psexec(vbs_win, hostname, username, password, psexec_path,
-                         jid, qid, mid, mname)
-        if ok:
-            return
+    if is_local or not hostname:
+        # Direct local execution - no wmic/psexec needed
+        D.add_log(jid, qid, mid, "INFO", "EXEC_LOCAL",
+                  f"Local execution: cscript {vbs_win}")
+        subprocess.Popen(
+            ["cscript", "//NoLogo", vbs_win],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        )
+        return
 
-        D.add_log(jid, qid, mid, "WARN", "EXEC_FALLBACK",
-                  f"Remote exec failed, using local cscript")
+    # Remote machine - try wmic then psexec
+    ok = _try_wmic(vbs_win, hostname, username, password, jid, qid, mid, mname)
+    if ok:
+        return
 
-    # Local execution (works when server IS the target machine, or as fallback)
-    D.add_log(jid, qid, mid, "INFO", "EXEC_LOCAL",
-              f"cscript {vbs_win}")
+    psexec_path = D.get_setting("psexec_path", "psexec")
+    ok = _try_psexec(vbs_win, hostname, username, password, psexec_path,
+                     jid, qid, mid, mname)
+    if ok:
+        return
+
+    # Fallback to local cscript
+    D.add_log(jid, qid, mid, "WARN", "EXEC_FALLBACK",
+              f"Remote failed, using local cscript")
     subprocess.Popen(
         ["cscript", "//NoLogo", vbs_win],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
