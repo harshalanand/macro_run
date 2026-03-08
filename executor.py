@@ -1,11 +1,12 @@
 """
-Queue-based executor v4:
-- Copy files to REMOTE machine (date folder)
-- For macro: copy excel to LOCAL temp dir -> paste category -> run macro -> copy output back
-- This solves Excel COM not being able to open files from UNC paths
-- Queue: N machines process M categories, auto-redistribute when free
+Queue-based executor v5:
+- PREP:    Copy files to remote machine date folder (unchanged)
+- EXEC:    Write VBS to remote share → execute ON the remote machine via wmic
+           VBS writes output to a log file; Python polls the log via UNC share
+- COLLECT: New output files appear in remote date folder → copy to compile_dir
+- FALLBACK: If system_name is absent / wmic unavailable, fall back to local execution
 """
-import os, json, shutil, subprocess, threading, tempfile
+import os, json, shutil, subprocess, threading, tempfile, time, csv
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -48,17 +49,17 @@ def _run_job(jid):
         D.add_log(jid, level="INFO", step="START",
                    message=f"Job #{jid}: {len(queue_items)} categories across {len(machines)} machines")
 
-        # PHASE 1: Prep all machines in parallel (auth + folder + copy)
+        # PHASE 1: Copy files to all machines in parallel
         machine_ready = {}
         with ThreadPoolExecutor(max_workers=min(len(machines), 8)) as pool:
             futs = {pool.submit(_prep_machine, m, today, files, jid): m for m in machines}
             for fut in as_completed(futs):
                 m = futs[fut]
                 try:
-                    date_folder = fut.result()
-                    machine_ready[m["machine_id"]] = date_folder
+                    unc_folder = fut.result()
+                    machine_ready[m["machine_id"]] = unc_folder
                     D.add_log(jid, machine_id=m["machine_id"], level="INFO", step="PREP_OK",
-                              message=f"{m['machine_name']}: ready at {date_folder}")
+                              message=f"{m['machine_name']}: files copied to {unc_folder}")
                 except Exception as e:
                     D.add_log(jid, machine_id=m["machine_id"], level="ERROR", step="PREP_FAIL",
                               message=f"{m['machine_name']}: {e}")
@@ -69,8 +70,8 @@ def _run_job(jid):
             D.add_log(jid, level="ERROR", step="ABORT", message="No machines available")
             D.finish_job(jid); return
 
-        # PHASE 2: Workers process queue
-        def machine_worker(mid, remote_date_folder):
+        # PHASE 2: Workers process queue - SIMPLIFIED: Copy → Execute Locally → Collect
+        def machine_worker(mid, remote_date_folder, can_run_remote):
             m = D.get_machine(mid)
             mname = m["machine_name"]
 
@@ -82,73 +83,78 @@ def _run_job(jid):
                 qid = item["queue_id"]
                 cat = item["cat_value"]
                 start = datetime.now()
-                local_work = None
+                new_files = []
                 D.add_log(jid, qid, mid, "INFO", "CAT_START", f"{mname}: category '{cat}'")
 
                 try:
-                    # Step 1: Copy ALL files from remote to LOCAL temp folder
+                    # ── SIMPLE: Copy → Execute Locally → Collect ──
+                    # Copy shared folder contents to local temp
                     local_work = tempfile.mkdtemp(prefix=f"macro_{mname[:10]}_{cat[:10]}_")
-                    D.add_log(jid, qid, mid, "INFO", "LOCAL_COPY",
-                              f"Copying to local temp: {local_work}")
+                    try:
+                        D.add_log(jid, qid, mid, "INFO", "LOCAL_COPY",
+                                  f"Copying to local: {local_work}")
+                        
+                        # Copy all files from remote shared folder to local temp
+                        for fname in os.listdir(remote_date_folder):
+                            src = os.path.join(remote_date_folder, fname)
+                            if os.path.isfile(src) and not fname.startswith("_") and not fname.startswith("~$"):
+                                shutil.copy2(src, os.path.join(local_work, fname))
 
-                    for fname in os.listdir(remote_date_folder):
-                        src = os.path.join(remote_date_folder, fname)
-                        if os.path.isfile(src) and not fname.startswith("_"):
-                            shutil.copy2(src, os.path.join(local_work, fname))
+                        local_excel = os.path.join(local_work, excel_file)
+                        if not os.path.exists(local_excel):
+                            raise FileNotFoundError(f"Excel file not found: {excel_file}")
 
-                    local_excel = os.path.join(local_work, excel_file)
-                    if not os.path.exists(local_excel):
-                        raise FileNotFoundError(f"Macro file not in local temp: {excel_file}")
+                        # Execute macro locally
+                        D.add_log(jid, qid, mid, "INFO", "MACRO_RUN",
+                                  f"Executing: {excel_file} cell={target_cell}='{cat}'")
+                        vbs_out = _paste_and_run(local_excel, macro_name, target_cell, cat)
+                        D.add_log(jid, qid, mid, "INFO", "MACRO_DONE",
+                                  f"Macro executed successfully")
 
-                    D.add_log(jid, qid, mid, "INFO", "MACRO_RUN",
-                              f"Running macro on LOCAL: {local_excel} cell={target_cell}='{cat}'")
+                        # Find new output files
+                        original_names = {f["original_name"] for f in files}
+                        local_files = set(os.listdir(local_work))
+                        new_files = [
+                            f for f in (local_files - original_names)
+                            if not f.startswith("_") and not f.startswith("~$")
+                            and os.path.isfile(os.path.join(local_work, f))
+                        ]
 
-                    # Step 2: Paste category + run macro on LOCAL file
-                    vbs_out = _paste_and_run(local_excel, macro_name, target_cell, cat)
-                    D.add_log(jid, qid, mid, "INFO", "MACRO_DONE",
-                              f"{mname}: '{cat}' macro OK | {vbs_out[:150]}")
-
-                    # Step 3: Find new output files
-                    original_names = {f["original_name"] for f in files}
-                    local_files = set(os.listdir(local_work))
-                    new_files = [f for f in (local_files - original_names)
-                                 if not f.startswith("_macro_") and not f.startswith("~$")
-                                 and os.path.isfile(os.path.join(local_work, f))]
-
-                    # Step 4: Copy outputs back to remote + compile dir
-                    if new_files:
+                        # Copy output files back to remote shared folder
                         for nf in new_files:
                             try:
                                 shutil.copy2(os.path.join(local_work, nf),
                                              os.path.join(remote_date_folder, nf))
-                            except Exception as ce:
-                                D.add_log(jid, qid, mid, "WARN", "COPYBACK",
-                                          f"Failed copying {nf} to remote: {ce}")
+                                D.add_log(jid, qid, mid, "INFO", "OUTPUT_COPY",
+                                         f"Copied back: {nf}")
+                            except Exception as e:
+                                D.add_log(jid, qid, mid, "WARN", "OUTPUT_COPY_FAIL",
+                                         f"Failed to copy {nf}: {e}")
+                    finally:
+                        try: shutil.rmtree(local_work, ignore_errors=True)
+                        except: pass
 
+                    # ── Collect outputs to compile dir ──────────────────
+                    if new_files:
                         out_dir = os.path.join(compile_dir, today, group_name, mname, cat)
                         os.makedirs(out_dir, exist_ok=True)
                         for nf in new_files:
-                            shutil.copy2(os.path.join(local_work, nf),
+                            shutil.copy2(os.path.join(remote_date_folder, nf),
                                          os.path.join(out_dir, nf))
                             sz = os.path.getsize(os.path.join(out_dir, nf)) / 1024
                             D.add_log(jid, qid, mid, "INFO", "OUTPUT",
                                       f"Collected: {nf} ({sz:.1f}KB)")
                         D.finish_queue_item(qid, "RUNNING", output_files=json.dumps(new_files))
                     else:
-                        # Copy updated macro file back to remote
-                        try:
-                            shutil.copy2(local_excel,
-                                         os.path.join(remote_date_folder, excel_file))
-                        except: pass
                         D.add_log(jid, qid, mid, "INFO", "NO_NEW_OUTPUT",
-                                  "No new output files (macro may update the file itself)")
+                                  "No new output files created")
 
                     elapsed = (datetime.now() - start).total_seconds()
                     D.finish_queue_item(qid, "SUCCESS",
                         finished_at=datetime.now().isoformat(),
                         date_folder=remote_date_folder, duration_secs=elapsed)
                     D.add_log(jid, qid, mid, "INFO", "CAT_DONE",
-                              f"{mname}: '{cat}' done in {elapsed:.1f}s")
+                              f"Category '{cat}' done in {elapsed:.1f}s")
 
                 except Exception as e:
                     elapsed = (datetime.now() - start).total_seconds()
@@ -156,18 +162,14 @@ def _run_job(jid):
                         finished_at=datetime.now().isoformat(),
                         error_message=str(e)[:500], duration_secs=elapsed)
                     D.add_log(jid, qid, mid, "ERROR", "CAT_FAIL",
-                              f"{mname}: '{cat}' failed: {e}")
+                              f"Category '{cat}' failed: {e}")
                     N.notify_macro_failure(jid, qid, mname,
                         m["ip_address"], excel_file, macro_name, str(e), cat)
-                finally:
-                    if local_work:
-                        try: shutil.rmtree(local_work, ignore_errors=True)
-                        except: pass
 
-        # Launch workers
+        # Launch workers - SIMPLE: Copy → Execute → Collect
         with ThreadPoolExecutor(max_workers=len(machine_ready)) as pool:
-            futs = [pool.submit(machine_worker, mid, df)
-                    for mid, df in machine_ready.items()]
+            futs = [pool.submit(machine_worker, mid, unc_folder, True)
+                    for mid, unc_folder in machine_ready.items()]
             for w in as_completed(futs):
                 try: w.result()
                 except Exception as e:
@@ -175,6 +177,13 @@ def _run_job(jid):
 
         D.finish_job(jid)
         D.add_log(jid, level="INFO", step="JOB_DONE", message=f"Job #{jid} completed")
+        
+        # Track all collected output files
+        success, msg = track_collected_files(jid)
+        if success:
+            D.add_log(jid, level="INFO", step="TRACKER_CREATED", message=msg)
+        else:
+            D.add_log(jid, level="WARN", step="TRACKER_SKIP", message=f"Tracker creation skipped: {msg}")
 
         # Summary email
         job = D.get_job(jid)
@@ -199,9 +208,10 @@ def _run_job(jid):
 
 
 def _prep_machine(machine, today, files, jid):
-    """Auth + create date folder + copy files. Returns remote date_folder."""
+    """Copy files to shared folder date folder.
+    Returns unc_date_folder path.
+    """
     shared = machine["shared_folder"].strip()
-    system_name = (machine["system_name"] or "").strip()
     username = (machine["username"] or "").strip()
     password = (machine["password"] or "").strip()
     mid = machine["machine_id"]
@@ -213,14 +223,24 @@ def _prep_machine(machine, today, files, jid):
     try:
         os.makedirs(date_folder, exist_ok=True)
     except PermissionError:
-        if system_name and username and password:
-            _net_use(f"\\\\{system_name}", username, password, jid, mid)
+        if username and password:
+            _net_use(f"\\\\{shared.split(chr(92))[2]}", username, password, jid, mid)
             os.makedirs(date_folder, exist_ok=True)
         else:
             raise
 
     def copy_one(f):
-        shutil.copy2(f["stored_path"], os.path.join(date_folder, f["original_name"]))
+        dst = os.path.join(date_folder, f["original_name"])
+        last_err = None
+        for attempt in range(3):
+            try:
+                shutil.copy2(f["stored_path"], dst)
+                return
+            except OSError as e:
+                last_err = e
+                if attempt < 2:
+                    time.sleep(2)
+        raise last_err
 
     with ThreadPoolExecutor(max_workers=min(len(files), 4)) as pool:
         futs = [pool.submit(copy_one, f) for f in files]
@@ -229,6 +249,7 @@ def _prep_machine(machine, today, files, jid):
 
     D.add_log(jid, machine_id=mid, level="INFO", step="FILES_COPIED",
               message=f"Copied {len(files)} files to {date_folder}")
+
     return date_folder
 
 
@@ -239,20 +260,36 @@ def _net_use(unc_path, username, password, jid=None, mid=None):
 
     if len(parts) >= 2:
         server_share = f"\\\\{parts[0]}\\{parts[1]}"
+        server_only  = f"\\\\{parts[0]}"
     elif len(parts) == 1:
         server_share = f"\\\\{parts[0]}"
+        server_only  = server_share
     else:
         D.add_log(jid, machine_id=mid, level="WARN", step="NET_USE",
                   message=f"Bad UNC path: {unc_path}")
         return
 
+    # Skip auth if username and password not provided
+    if not username or not password:
+        D.add_log(jid, machine_id=mid, level="INFO", step="NET_USE",
+                  message=f"Skipping auth (no credentials): {server_share}")
+        return
+
     D.add_log(jid, machine_id=mid, level="INFO", step="NET_USE",
               message=f"Running: net use {server_share} /user:{username}")
 
-    try:
-        subprocess.run(["net", "use", server_share, "/delete", "/y"],
-                       capture_output=True, timeout=10)
-    except: pass
+    # Aggressively disconnect ALL sessions to prevent error 1219
+    for path in [server_only, server_share]:
+        for _ in range(2):  # Try twice to be sure
+            try:
+                subprocess.run(["net", "use", path, "/delete", "/y"],
+                              capture_output=True, timeout=10)
+                time.sleep(0.5)
+            except:
+                pass
+
+    # Add modest delay to ensure cleanup is complete
+    time.sleep(1)
 
     r = subprocess.run(
         ["net", "use", server_share, f"/user:{username}", password, "/persistent:no"],
@@ -265,6 +302,8 @@ def _net_use(unc_path, username, password, jid=None, mid=None):
     else:
         D.add_log(jid, machine_id=mid, level="INFO", step="NET_USE",
                   message=f"OK: authenticated to {server_share}")
+
+
 
 
 def _paste_and_run(local_excel_path, macro_name, target_cell, cat_value, timeout=600):
@@ -297,10 +336,10 @@ Err.Clear
 
 WScript.Echo "OPENING: {excel_path}"
 Dim xlWb
-Set xlWb = xlApp.Workbooks.Open("{excel_path}")
+Set xlWb = xlApp.Workbooks.Open("{excel_path}", 0)
 If Err.Number <> 0 Then
-    WScript.Echo "ERROR_OPEN:" & Err.Description
-    xlApp.Quit: Set xlApp = Nothing: WScript.Quit 1
+    WScript.Echo "ERROR_OPEN:" & Err.Number & ":" & Err.Description
+    xlApp.Quit: Set xlApp = Nothing: WScript.Sleep 1000: WScript.Quit 1
 End If
 Err.Clear
 
@@ -309,22 +348,23 @@ Dim xlWs
 Set xlWs = xlWb.Sheets(1)
 xlWs.Range("{target_cell}").Value = "{safe_cat}"
 If Err.Number <> 0 Then
-    WScript.Echo "ERROR_PASTE:" & Err.Description
-    xlWb.Close False: xlApp.Quit: Set xlApp = Nothing: WScript.Quit 3
+    WScript.Echo "ERROR_PASTE:" & Err.Number & ":" & Err.Description
+    xlWb.Close False: xlApp.Quit: Set xlApp = Nothing: WScript.Sleep 1000: WScript.Quit 3
 End If
 Err.Clear
 
 WScript.Echo "RUNNING: {macro_name}"
 xlApp.Run "{macro_name}"
 If Err.Number <> 0 Then
-    WScript.Echo "ERROR_MACRO:" & Err.Description
-    xlWb.Close False: xlApp.Quit: Set xlApp = Nothing: WScript.Quit 2
+    WScript.Echo "ERROR_MACRO:" & Err.Number & ":" & Err.Description
+    xlWb.Close False: xlApp.Quit: Set xlApp = Nothing: WScript.Sleep 1000: WScript.Quit 2
 End If
 
 xlWb.Save
 xlWb.Close False
 xlApp.Quit
 Set xlApp = Nothing
+WScript.Sleep 1000
 WScript.Echo "SUCCESS"
 WScript.Quit 0
 '''
@@ -341,3 +381,72 @@ WScript.Quit 0
     finally:
         try: os.remove(vbs_path)
         except: pass
+
+def track_collected_files(jid):
+    """
+    Create a tracker file listing all collected output files.
+    Writes to: compiled_output/{date}/{group}/TRACKER_{timestamp}.csv
+    Format: job_id,date,group,machine,category,filename,filepath,collected_at
+    """
+    job = D.get_job(jid)
+    if not job:
+        return False, "Job not found"
+    
+    today = datetime.now().strftime("%Y-%m-%d")
+    group_name = job["group_name"]
+    compile_base = D.get_setting("compile_path", "") or COMPILED_DIR
+    compile_root = os.path.join(compile_base, today, group_name)
+    
+    try:
+        # Create directory if it doesn't exist
+        os.makedirs(compile_root, exist_ok=True)
+        
+        tracker_path = os.path.join(compile_root, 
+                                   f"TRACKER_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        
+        collected_files = []
+        
+        # Get all queue items with outputs
+        queue_items = D.get_queue(jid)
+        for item in queue_items:
+            if item.get("output_files"):
+                try:
+                    files = json.loads(item["output_files"])
+                    for fname in files:
+                        output_path = os.path.join(
+                            item["date_folder"] or "",
+                            fname
+                        )
+                        collected_files.append({
+                            "job_id": jid,
+                            "date": today,
+                            "group": group_name,
+                            "machine": item["machine_name"] or "Unknown",
+                            "category": item["cat_value"],
+                            "filename": fname,
+                            "filepath": output_path,
+                            "collected_at": datetime.now().isoformat()
+                        })
+                except:
+                    pass
+        
+        # Write tracker CSV regardless of whether files exist (audit trail)
+        with open(tracker_path, "w", newline="", encoding="utf-8") as f:
+            fieldnames = ["job_id", "date", "group", "machine", "category", 
+                         "filename", "filepath", "collected_at"]
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(collected_files)
+        
+        if collected_files:
+            D.add_log(jid, level="INFO", step="TRACKER_CREATED",
+                    message=f"Created tracker: {os.path.basename(tracker_path)} ({len(collected_files)} files)")
+            return True, f"Tracked {len(collected_files)} files in {os.path.basename(tracker_path)}"
+        else:
+            D.add_log(jid, level="INFO", step="TRACKER_CREATED",
+                    message=f"Created tracker: {os.path.basename(tracker_path)} (no output files)")
+            return True, f"Tracker created (0 files collected - all tasks may have failed)"
+    
+    except Exception as e:
+        D.add_log(jid, level="ERROR", step="TRACKER_FAIL", message=str(e))
+        return False, str(e)

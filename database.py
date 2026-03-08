@@ -201,27 +201,21 @@ def delete_group(gid):
                 if r["stored_path"] and os.path.exists(r["stored_path"]):
                     os.remove(r["stored_path"])
             except: pass
-
-        # 1. Get all job IDs for this group
+        # manual cascade for safety
+        c.execute("DELETE FROM items WHERE group_id=?", (gid,))
+        c.execute("DELETE FROM group_files WHERE group_id=?", (gid,))
+        mids = [r["machine_id"] for r in c.execute("SELECT machine_id FROM machines WHERE group_id=?", (gid,)).fetchall()]
+        if mids:
+            ph = ",".join("?" * len(mids))
+            c.execute(f"DELETE FROM job_queue WHERE machine_id IN ({ph})", mids)
+        c.execute("DELETE FROM machines WHERE group_id=?", (gid,))
         jids = [r["job_id"] for r in c.execute("SELECT job_id FROM jobs WHERE group_id=?", (gid,)).fetchall()]
         if jids:
             ph = ",".join("?" * len(jids))
-            # Delete job_queue FIRST (has FK to categories + machines)
             c.execute(f"DELETE FROM job_queue WHERE job_id IN ({ph})", jids)
             c.execute(f"DELETE FROM run_logs WHERE job_id IN ({ph})", jids)
             c.execute(f"DELETE FROM email_log WHERE job_id IN ({ph})", jids)
         c.execute("DELETE FROM jobs WHERE group_id=?", (gid,))
-
-        # 2. Now safe to delete categories (no more FK refs from job_queue)
-        c.execute("DELETE FROM categories WHERE group_id=?", (gid,))
-
-        # 3. Delete machines
-        c.execute("DELETE FROM machines WHERE group_id=?", (gid,))
-
-        # 4. Delete files
-        c.execute("DELETE FROM group_files WHERE group_id=?", (gid,))
-
-        # 5. Finally delete the group
         c.execute("DELETE FROM machine_groups WHERE group_id=?", (gid,))
 
 # ── MACHINES ────────────────────────────────────────────
@@ -240,9 +234,11 @@ def get_machine(mid):
 
 def delete_machine(mid):
     with db() as c:
-        # Clear FK refs in job_queue first
-        c.execute("UPDATE job_queue SET machine_id=NULL WHERE machine_id=?", (mid,))
         c.execute("DELETE FROM machines WHERE machine_id=?", (mid,))
+
+def toggle_machine(mid):
+    with db() as c:
+        c.execute("UPDATE machines SET is_active=1-is_active WHERE machine_id=?", (mid,))
 
 def update_machine(mid, **kw):
     allowed = {"machine_name","system_name","ip_address","shared_folder","username","password","department","location"}
@@ -251,10 +247,6 @@ def update_machine(mid, **kw):
     with db() as c:
         clause = ", ".join(f"{k}=?" for k in u)
         c.execute(f"UPDATE machines SET {clause} WHERE machine_id=?", list(u.values())+[mid])
-
-def toggle_machine(mid):
-    with db() as c:
-        c.execute("UPDATE machines SET is_active=1-is_active WHERE machine_id=?", (mid,))
 
 def bulk_import_machines(gid, rows):
     added = 0
@@ -309,29 +301,14 @@ def get_categories(gid):
 
 def delete_category(cid):
     with db() as c:
-        # Clear FK refs in job_queue first
-        c.execute("DELETE FROM job_queue WHERE cat_id=?", (cid,))
         c.execute("DELETE FROM categories WHERE cat_id=?", (cid,))
-
-def delete_all_categories(gid):
-    """Delete all categories for a group (bulk clear)."""
-    with db() as c:
-        cat_ids = [r["cat_id"] for r in c.execute("SELECT cat_id FROM categories WHERE group_id=?", (gid,)).fetchall()]
-        if cat_ids:
-            ph = ",".join("?" * len(cat_ids))
-            c.execute(f"DELETE FROM job_queue WHERE cat_id IN ({ph})", cat_ids)
-        c.execute("DELETE FROM categories WHERE group_id=?", (gid,))
 
 def bulk_import_categories(gid, values):
     added = 0
-    # Common header values to skip
-    headers = {"cat_value", "category", "cat", "value", "maj", "majcat", "maj_cat",
-               "cat_no", "catno", "category_value", "sr", "sno", "s.no", "sr.no", "no"}
     with db() as c:
         for i, v in enumerate(values):
             v = v.strip()
             if not v: continue
-            if v.lower() in headers: continue  # skip header row
             try:
                 c.execute("INSERT INTO categories(group_id,cat_value,sort_order) VALUES(?,?,?)", (gid,v,i))
                 added += 1
