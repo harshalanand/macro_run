@@ -94,15 +94,70 @@ def _run_job(jid):
                         D.add_log(jid, qid, mid, "INFO", "LOCAL_COPY",
                                   f"Copying to local: {local_work}")
                         
-                        # Copy all files from remote shared folder to local temp
+                        # List all files to copy
+                        available_files = []
                         for fname in os.listdir(remote_date_folder):
                             src = os.path.join(remote_date_folder, fname)
                             if os.path.isfile(src) and not fname.startswith("_") and not fname.startswith("~$"):
-                                shutil.copy2(src, os.path.join(local_work, fname))
+                                try:
+                                    size = os.path.getsize(src)
+                                    available_files.append((fname, src, size))
+                                except:
+                                    pass  # Skip if can't stat
+                        
+                        D.add_log(jid, qid, mid, "INFO", "LOCAL_COPY_LIST",
+                                  f"Found {len(available_files)} files to copy")
+                        
+                        # Copy each file with retry and verification
+                        copy_errors = []
+                        for fname, src, expected_size in available_files:
+                            dst = os.path.join(local_work, fname)
+                            success = False
+                            
+                            for attempt in range(3):
+                                try:
+                                    # Add small delay before copy to avoid locking
+                                    if attempt > 0:
+                                        time.sleep(2)
+                                    
+                                    # Copy file
+                                    shutil.copy2(src, dst)
+                                    time.sleep(0.5)  # Let filesystem catch up
+                                    
+                                    # Verify copy
+                                    if not os.path.exists(dst):
+                                        raise OSError(f"Copy verification failed: {dst} not found")
+                                    
+                                    actual_size = os.path.getsize(dst)
+                                    if actual_size != expected_size:
+                                        raise OSError(f"Size mismatch: {actual_size} != {expected_size}")
+                                    
+                                    D.add_log(jid, qid, mid, "INFO", "LOCAL_COPY_OK",
+                                              f"{fname} ({actual_size/1024/1024:.1f}MB)")
+                                    success = True
+                                    break
+                                    
+                                except Exception as e:
+                                    if attempt < 2:
+                                        D.add_log(jid, qid, mid, "WARN", "LOCAL_COPY_RETRY",
+                                                  f"{fname}: attempt {attempt+1}/3: {str(e)[:80]}")
+                                    else:
+                                        msg = f"{fname}: {str(e)[:100]}"
+                                        copy_errors.append(msg)
+                                        D.add_log(jid, qid, mid, "ERROR", "LOCAL_COPY_FAIL", msg)
+                            
+                            if not success and fname == excel_file:
+                                # If we can't copy the main Excel file, fail immediately
+                                raise RuntimeError(f"Cannot copy required file: {excel_file}")
 
+                        if copy_errors:
+                            raise RuntimeError(f"Copy failures: {'; '.join(copy_errors)}")
+
+                        # Verify all required files are present before execution
                         local_excel = os.path.join(local_work, excel_file)
                         if not os.path.exists(local_excel):
-                            raise FileNotFoundError(f"Excel file not found: {excel_file}")
+                            local_files = os.listdir(local_work)
+                            raise FileNotFoundError(f"Excel file '{excel_file}' not in workspace. Found: {local_files}")
 
                         # Execute macro locally
                         D.add_log(jid, qid, mid, "INFO", "MACRO_RUN",
@@ -231,24 +286,87 @@ def _prep_machine(machine, today, files, jid):
 
     def copy_one(f):
         dst = os.path.join(date_folder, f["original_name"])
+        fname = f["original_name"]
+        src = f["stored_path"]
         last_err = None
+        
         for attempt in range(3):
             try:
-                shutil.copy2(f["stored_path"], dst)
-                return
-            except OSError as e:
+                # Log each file copy attempt
+                if attempt == 0:
+                    D.add_log(jid, machine_id=mid, level="INFO", step="FILE_COPY",
+                              message=f"Copying: {fname}")
+                else:
+                    D.add_log(jid, machine_id=mid, level="INFO", step="FILE_COPY_RETRY",
+                              message=f"Retry {attempt}: {fname}")
+                
+                # Check if source exists
+                if not os.path.exists(src):
+                    raise FileNotFoundError(f"Source not found: {src}")
+                
+                # Copy with timeout using subprocess for large files
+                try:
+                    # For .xlsb files, use robocopy for more reliable transfer
+                    if fname.endswith('.xlsb'):
+                        r = subprocess.run(
+                            ["robocopy", os.path.dirname(src), date_folder, fname, "/Z", "/R:2", "/W:2"],
+                            capture_output=True, text=True, timeout=300
+                        )
+                        if r.returncode > 7:  # robocopy returns 0-7 for success
+                            raise OSError(f"robocopy failed: {r.stderr}")
+                    else:
+                        # For other files, use shutil with a manual timeout check
+                        shutil.copy2(src, dst)
+                    
+                    # Verify copy completed
+                    if not os.path.exists(dst):
+                        raise OSError(f"Copy verification failed: {dst} not found after copy")
+                    
+                    src_size = os.path.getsize(src)
+                    dst_size = os.path.getsize(dst)
+                    if src_size != dst_size:
+                        raise OSError(f"Size mismatch: {src_size} vs {dst_size}")
+                    
+                    D.add_log(jid, machine_id=mid, level="INFO", step="FILE_COPY_OK",
+                              message=f"Copied OK: {fname} ({dst_size/1024/1024:.1f}MB)")
+                    return
+                    
+                except subprocess.TimeoutExpired:
+                    last_err = TimeoutError(f"Copy timeout after 300s: {fname}")
+                    
+            except Exception as e:
                 last_err = e
                 if attempt < 2:
-                    time.sleep(2)
+                    time.sleep(3)  # Wait 3 seconds before retry
+                    
+        # All retries exhausted
+        D.add_log(jid, machine_id=mid, level="ERROR", step="FILE_COPY_FAIL",
+                  message=f"Failed to copy {fname}: {last_err}")
         raise last_err
 
-    with ThreadPoolExecutor(max_workers=min(len(files), 4)) as pool:
-        futs = [pool.submit(copy_one, f) for f in files]
+    # Copy all files with sequential or parallel approach
+    failed = []
+    max_workers = min(len(files), 2)  # Reduce parallel workers for large files
+    D.add_log(jid, machine_id=mid, level="INFO", step="PREP_START",
+              message=f"Starting copy of {len(files)} files with {max_workers} workers")
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futs = {pool.submit(copy_one, f): f["original_name"] for f in files}
         for fut in as_completed(futs):
-            fut.result()
+            fname = futs[fut]
+            try:
+                fut.result(timeout=300)  # 5 minute timeout per file
+            except Exception as e:
+                failed.append((fname, str(e)))
+                D.add_log(jid, machine_id=mid, level="ERROR", step="FILE_FAIL",
+                          message=f"{fname}: {str(e)[:150]}")
 
+    if failed:
+        msg = "; ".join([f"{f[0]}: {f[1][:50]}" for f in failed])
+        raise Exception(f"Failed to copy {len(failed)} files: {msg}")
+    
     D.add_log(jid, machine_id=mid, level="INFO", step="FILES_COPIED",
-              message=f"Copied {len(files)} files to {date_folder}")
+              message=f"✓ All {len(files)} files copied to {date_folder}")
 
     return date_folder
 
@@ -309,6 +427,20 @@ def _net_use(unc_path, username, password, jid=None, mid=None):
 def _paste_and_run(local_excel_path, macro_name, target_cell, cat_value, timeout=600):
     """Open LOCAL excel, paste category, run macro, save, close."""
     excel_path = os.path.abspath(local_excel_path).replace("/", "\\")
+    
+    # Check file exists and is readable before VBS execution
+    if not os.path.exists(excel_path):
+        raise FileNotFoundError(f"Excel file not found: {excel_path}")
+    
+    try:
+        # Try to open file to verify it's not locked and readable
+        with open(excel_path, 'rb') as f:
+            header = f.read(4)
+            if header[:2] != b'PK':  # .xlsb files are ZIP format
+                raise ValueError(f"File appears corrupted (not valid .xlsb): {excel_path}")
+    except Exception as e:
+        raise RuntimeError(f"Cannot read Excel file: {e}")
+    
     vbs_path = os.path.join(os.path.dirname(excel_path), f"_macro_{os.getpid()}.vbs")
     safe_cat = str(cat_value).replace('"', '""')
 
@@ -409,20 +541,21 @@ def track_collected_files(jid):
         # Get all queue items with outputs
         queue_items = D.get_queue(jid)
         for item in queue_items:
-            if item.get("output_files"):
+            item_dict = dict(item)  # Convert sqlite3.Row to dict
+            if item_dict.get("output_files"):
                 try:
-                    files = json.loads(item["output_files"])
+                    files = json.loads(item_dict["output_files"])
                     for fname in files:
                         output_path = os.path.join(
-                            item["date_folder"] or "",
+                            item_dict["date_folder"] or "",
                             fname
                         )
                         collected_files.append({
                             "job_id": jid,
                             "date": today,
                             "group": group_name,
-                            "machine": item["machine_name"] or "Unknown",
-                            "category": item["cat_value"],
+                            "machine": item_dict["machine_name"] or "Unknown",
+                            "category": item_dict["cat_value"],
                             "filename": fname,
                             "filepath": output_path,
                             "collected_at": datetime.now().isoformat()
