@@ -9,3 +9,7 @@ compiled_output/*
 logs/*
 !logs/.gitkeep
 .env
+tracker.db-shm
+tracker.db-wal
+*.db-shm
+*.db-wal
