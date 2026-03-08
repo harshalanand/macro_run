@@ -56,9 +56,24 @@ async def job_detail(r: Request, jid: int):
 async def logs_page(r: Request):
     return tpl.TemplateResponse("app.html", {"request": r, "page": "logs", "logs": D.get_logs(limit=500)})
 
+@app.post("/api/logs/clear")
+async def clear_logs():
+    D.clear_logs()
+    return RedirectResponse("/logs", 303)
+
+@app.post("/api/logs/clear/{jid}")
+async def clear_job_logs(jid: int):
+    D.clear_logs(jid)
+    return RedirectResponse(f"/jobs/{jid}", 303)
+
 @app.get("/emails", response_class=HTMLResponse)
 async def emails_page(r: Request):
     return tpl.TemplateResponse("app.html", {"request": r, "page": "emails", "emails": D.get_email_logs()})
+
+@app.post("/api/emails/clear")
+async def clear_emails():
+    D.clear_email_logs()
+    return RedirectResponse("/emails", 303)
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(r: Request):
@@ -231,15 +246,26 @@ async def job_status(jid: int):
         "queue": [{"id":i["queue_id"],"cat":i["cat_value"],"machine":i["machine_name"]or"",
                     "status":i["status"],"duration":i["duration_secs"],"error":i["error_message"]} for i in q]})
 
+@app.post("/api/jobs/{jid}/kill")
+async def kill_job(jid: int):
+    if E.is_running(jid):
+        E.kill_job(jid)
+    else:
+        D.kill_job_db(jid)
+    return RedirectResponse(f"/jobs/{jid}", 303)
+
 # ── SETTINGS ────────────────────────────────────────────────────────────────
 
 @app.post("/api/settings")
 async def save_settings(smtp_host:str=Form(""), smtp_port:str=Form("587"),
     smtp_username:str=Form(""), smtp_password:str=Form(""), smtp_from:str=Form(""),
-    notify_emails:str=Form(""), email_enabled:str=Form("0"), compile_path:str=Form("")):
+    notify_emails:str=Form(""), email_enabled:str=Form("0"), compile_path:str=Form(""),
+    exec_method:str=Form("auto"), psexec_path:str=Form("psexec"),
+    macro_timeout:str=Form("600")):
     for k,v in {"smtp_host":smtp_host,"smtp_port":smtp_port,"smtp_username":smtp_username,
         "smtp_from":smtp_from,"notify_emails":notify_emails,"email_enabled":email_enabled,
-        "compile_path":compile_path}.items():
+        "compile_path":compile_path,"exec_method":exec_method,"psexec_path":psexec_path,
+        "macro_timeout":macro_timeout}.items():
         D.set_setting(k, v)
     if smtp_password.strip():
         D.set_setting("smtp_password", smtp_password)
