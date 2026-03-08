@@ -292,7 +292,8 @@ textarea{resize:vertical;min-height:60px}
 {% elif page=='jdetail' %}
 <div class="top"><h2>Job #{{j.job_id}} — {{j.group_name}}</h2>
 <div class="act"><span class="mono" style="color:var(--tx3)">{{j.job_date}}</span>
-{% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUNNING</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}
+{% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUNNING</span>{% elif j.status=='KILLED' %}<span class="badge b-err">KILLED</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}
+{% if j.status=='RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/kill" style="display:inline"><button class="btn btn-r" onclick="return confirm('Kill this job? Running macros will complete but no new categories will start.')">Kill Job</button></form>{% endif %}
 </div></div>
 <div class="ct">
 <div class="sg">
@@ -306,12 +307,14 @@ textarea{resize:vertical;min-height:60px}
 {% for q in queue %}<tr>
 <td><span class="tag" style="font-size:12px">{{q.cat_value}}</span></td>
 <td>{{q.machine_name or '-'}}</td>
-<td>{% if q.status=='SUCCESS' %}<span class="badge b-ok">OK</span>{% elif q.status=='RUNNING' %}<span class="badge b-blue pulse">RUN</span>{% elif q.status=='QUEUED' %}<span class="badge b-gray">QUEUED</span>{% else %}<span class="badge b-err">FAIL</span>{% endif %}</td>
+<td>{% if q.status=='SUCCESS' %}<span class="badge b-ok">OK</span>{% elif q.status=='RUNNING' %}<span class="badge b-blue pulse">RUN</span>{% elif q.status=='QUEUED' %}<span class="badge b-gray">QUEUED</span>{% elif q.status=='CANCELLED' %}<span class="badge b-warn">CANCEL</span>{% else %}<span class="badge b-err">FAIL</span>{% endif %}</td>
 <td class="mono">{{"%.1f"|format(q.duration_secs)~'s' if q.duration_secs else '-'}}</td>
 <td style="font-size:11px;color:var(--err);max-width:280px">{{q.error_message[:120] if q.error_message else ''}}</td>
 </tr>{% endfor %}</table></div>
 
-<div class="card"><h3>Execution Log</h3><div style="max-height:350px;overflow-y:auto">
+<div class="card"><div class="fx mb" style="justify-content:space-between"><h3 style="margin:0">Execution Log</h3>
+<form method="post" action="/api/logs/clear/{{j.job_id}}" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Clear logs for this job?')">Clear Logs</button></form>
+</div><div style="max-height:350px;overflow-y:auto">
 <table class="lt"><tr><th>Time</th><th>Lvl</th><th>Machine</th><th>Step</th><th>Message</th></tr>
 {% for l in logs %}<tr>
 <td>{{l.created_at[11:] if l.created_at else ''}}</td>
@@ -324,7 +327,9 @@ textarea{resize:vertical;min-height:60px}
 
 {# ═══════════ LOGS ═══════════ #}
 {% elif page=='logs' %}
-<div class="top"><h2>Audit Logs</h2></div>
+<div class="top"><h2>Audit Logs</h2><div class="act">
+<form method="post" action="/api/logs/clear"><button class="btn btn-r btn-s" onclick="return confirm('Delete ALL logs?')">Clear All Logs</button></form>
+</div></div>
 <div class="ct"><div class="card" style="padding:0;overflow:hidden"><div style="max-height:72vh;overflow-y:auto">
 <table class="lt"><tr><th>Time</th><th>Lvl</th><th>Machine</th><th>Job</th><th>Step</th><th>Message</th></tr>
 {% for l in logs %}<tr>
@@ -335,7 +340,9 @@ textarea{resize:vertical;min-height:60px}
 
 {# ═══════════ EMAILS ═══════════ #}
 {% elif page=='emails' %}
-<div class="top"><h2>Email Alerts</h2></div>
+<div class="top"><h2>Email Alerts</h2><div class="act">
+<form method="post" action="/api/emails/clear"><button class="btn btn-r btn-s" onclick="return confirm('Delete ALL email logs?')">Clear All</button></form>
+</div></div>
 <div class="ct">
 {% if emails %}<table><tr><th>Time</th><th>Machine</th><th>Subject</th><th>To</th><th>Status</th><th>Error</th></tr>
 {% for e in emails %}<tr>
@@ -350,10 +357,31 @@ textarea{resize:vertical;min-height:60px}
 <div class="top"><h2>Settings</h2></div>
 <div class="ct">
 <form method="post" action="/api/settings">
+
+<div class="card"><h3>Execution Method (How to run macros on remote machines)</h3>
+<div class="fr">
+<div class="fg" style="max-width:200px"><label>Method</label><select name="exec_method">
+<option value="auto" {{'selected' if cfg.get('exec_method','auto')=='auto'}}>Auto (try all)</option>
+<option value="psexec" {{'selected' if cfg.get('exec_method')=='psexec'}}>PsExec only</option>
+<option value="wmic" {{'selected' if cfg.get('exec_method')=='wmic'}}>WMIC only</option>
+<option value="schtasks" {{'selected' if cfg.get('exec_method')=='schtasks'}}>Scheduled Task</option>
+<option value="local" {{'selected' if cfg.get('exec_method')=='local'}}>Local (server has Excel)</option>
+</select></div>
+<div class="fg"><label>PsExec Path</label><input type="text" name="psexec_path" value="{{cfg.get('psexec_path','psexec')}}" placeholder="psexec or D:\Tools\psexec.exe"></div>
+<div class="fg" style="max-width:120px"><label>Timeout (sec)</label><input type="text" name="macro_timeout" value="{{cfg.get('macro_timeout','600')}}"></div>
+</div>
+<div style="font-size:11px;color:var(--tx3);margin-top:4px">
+<b>Auto</b>: tries PsExec → wmic → schtasks → local fallback.
+<b>PsExec</b>: download from <a href="https://learn.microsoft.com/en-us/sysinternals/downloads/psexec" target="_blank">Microsoft Sysinternals</a> (recommended).
+<b>Local</b>: runs macro on this server (requires Excel installed here).
+</div>
+</div>
+
 <div class="card"><h3>Output Path</h3>
 <div class="fg mb"><label>Compiled Output Directory</label><input type="text" name="compile_path" value="{{cfg.get('compile_path','')}}" placeholder="D:\compiled_output (leave blank for default)"></div>
-<p style="font-size:11px;color:var(--tx3)">Output collected after macro runs. Organized as: path/{date}/{group}/{machine}/{category}/</p>
+<p style="font-size:11px;color:var(--tx3)">Output collected after macro runs. Structure: path/{date}/{group}/{machine}/{category}/</p>
 </div>
+
 <div class="card"><h3>Email Notifications</h3>
 <div class="fr"><div class="fg" style="max-width:160px"><label>Enable</label><select name="email_enabled">
 <option value="0" {{'selected' if cfg.get('email_enabled','0')=='0'}}>Disabled</option>

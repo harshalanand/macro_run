@@ -247,6 +247,9 @@ def delete_machine(mid):
 def update_machine(mid, **kw):
     allowed = {"machine_name","system_name","ip_address","shared_folder","username","password","department","location"}
     u = {k:v for k,v in kw.items() if k in allowed}
+    # Don't overwrite password with empty string (user left field blank = keep existing)
+    if "password" in u and not u["password"]:
+        del u["password"]
     if not u: return
     with db() as c:
         clause = ", ".join(f"{k}=?" for k in u)
@@ -421,6 +424,24 @@ def get_email_logs(limit=100):
     with db() as c:
         return c.execute("SELECT * FROM email_log ORDER BY sent_at DESC LIMIT ?", (limit,)).fetchall()
 
+def clear_logs(job_id=None):
+    """Delete logs. If job_id, only that job's logs. Otherwise all."""
+    with db() as c:
+        if job_id:
+            c.execute("DELETE FROM run_logs WHERE job_id=?", (job_id,))
+        else:
+            c.execute("DELETE FROM run_logs")
+
+def clear_email_logs():
+    with db() as c:
+        c.execute("DELETE FROM email_log")
+
+def kill_job_db(jid):
+    """Mark a running job as KILLED in DB."""
+    with db() as c:
+        c.execute("UPDATE job_queue SET status='CANCELLED' WHERE job_id=? AND status='QUEUED'", (jid,))
+        c.execute("UPDATE jobs SET status='KILLED',finished_at=? WHERE job_id=? AND status='RUNNING'",
+                  (datetime.now().isoformat(), jid))
 # ── DASHBOARD ───────────────────────────────────────────
 def get_dashboard():
     with db() as c:
