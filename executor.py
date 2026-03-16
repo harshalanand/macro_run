@@ -1,15 +1,21 @@
 """
-Executor v6 - Zero local copy. Execute directly on remote machine.
+Executor v7 - True remote execution via schtasks.
 
-PREP:   Copy files to remote share ONCE (//machine/share/date/)
-EXEC:   Write VBS to same folder -> execute via wmic/psexec/cscript
-        VBS opens Excel from its OWN folder (script-relative path)
-        VBS writes _result_NNN.txt when done
-POLL:   Read _result_NNN.txt via UNC path
-COLLECT: Copy new output files to compile_dir
+HOW IT WORKS:
+  1. PREP: Copy files to each remote machine's shared folder ONCE
+  2. PER CATEGORY:
+     a. Write VBS to remote share (maps drive letter, opens Excel, runs macro)
+     b. Create scheduled task on remote machine via schtasks
+     c. Run the task (VBS executes ON the remote machine's Excel)
+     d. Poll _result file via UNC path
+     e. Collect output files
+     f. Delete scheduled task
+     g. Pick next QUEUED category
 
-NO temp copy per category. 303MB files stay on remote. Only VBS + result file per cat.
-60 cats / 40 machines = first 40 parallel, rest queued automatically.
+  60 cats / 40 machines = first 40 run in parallel, rest queue automatically.
+  Each machine runs ONE category at a time.
+
+EXECUTION CHAIN: schtasks -> psexec -> local cscript
 """
 import os, json, shutil, subprocess, threading, time, csv
 from datetime import datetime
@@ -22,7 +28,10 @@ COMPILED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compile
 _running_jobs = {}
 _kill_jobs = {}
 
-def is_running(jid): return _running_jobs.get(jid, False)
+
+def is_running(jid):
+    return _running_jobs.get(jid, False)
+
 
 def kill_job(jid):
     _kill_jobs[jid] = True
@@ -30,16 +39,22 @@ def kill_job(jid):
     with D.db() as c:
         c.execute("UPDATE job_queue SET status='CANCELLED' WHERE job_id=? AND status='QUEUED'", (jid,))
 
+
 def run_async(jid):
     _running_jobs[jid] = True
     _kill_jobs.pop(jid, None)
     threading.Thread(target=_run_job, args=(jid,), daemon=True).start()
 
 
+# =====================================================================
+#  MAIN JOB RUNNER
+# =====================================================================
+
 def _run_job(jid):
     try:
         job = D.get_job(jid)
-        if not job: return
+        if not job:
+            return
         gid = job["group_id"]
         group_name = job["group_name"]
         excel_file = job["excel_file_name"]
@@ -54,15 +69,17 @@ def _run_job(jid):
 
         if not machines:
             D.add_log(jid, level="ERROR", step="INIT", message="No active machines")
-            D.finish_job(jid); return
+            D.finish_job(jid)
+            return
         if not queue_items:
             D.add_log(jid, level="ERROR", step="INIT", message="No categories queued")
-            D.finish_job(jid); return
+            D.finish_job(jid)
+            return
 
         D.add_log(jid, level="INFO", step="START",
                   message=f"Job #{jid}: {len(queue_items)} cats x {len(machines)} machines")
 
-        # == PHASE 1: Prep all machines (auth + folder + copy files ONCE) ==
+        # == PHASE 1: Copy files to each machine ONCE ==
         machine_ready = {}
         with ThreadPoolExecutor(max_workers=min(len(machines), 8)) as pool:
             futs = {pool.submit(_prep_machine, m, today, files, jid): m for m in machines}
@@ -72,16 +89,17 @@ def _run_job(jid):
                     remote_folder = fut.result()
                     machine_ready[m["machine_id"]] = remote_folder
                 except Exception as e:
-                    D.add_log(jid, machine_id=m["machine_id"], level="ERROR", step="PREP_FAIL",
-                              message=f"{m['machine_name']}: {e}")
+                    D.add_log(jid, machine_id=m["machine_id"], level="ERROR",
+                              step="PREP_FAIL", message=f"{m['machine_name']}: {e}")
                     N.notify_copy_failure(jid, None, m["machine_name"],
                                           m["ip_address"], m["shared_folder"], str(e), "PREP")
 
         if not machine_ready:
             D.add_log(jid, level="ERROR", step="ABORT", message="No machines ready")
-            D.finish_job(jid); return
+            D.finish_job(jid)
+            return
 
-        # == PHASE 2: Process categories - NO local copy ==
+        # == PHASE 2: Each machine processes categories from queue ==
         def machine_worker(mid, remote_folder):
             m = D.get_machine(mid)
             mname = m["machine_name"]
@@ -92,15 +110,17 @@ def _run_job(jid):
             while not _kill_jobs.get(jid):
                 item = D.claim_next(jid, mid)
                 if not item:
-                    break
+                    break  # No more categories in queue
 
                 qid = item["queue_id"]
                 cat = item["cat_value"]
                 start = datetime.now()
-                D.add_log(jid, qid, mid, "INFO", "CAT_START", f"{mname}: '{cat}'")
+                D.add_log(jid, qid, mid, "INFO", "CAT_START",
+                          f"{mname}: processing '{cat}'")
 
                 vbs_path = None
                 result_path = None
+                task_name = f"MacroQ_{jid}_{qid}"
 
                 try:
                     safe_cat = str(cat).replace('"', '""')
@@ -109,29 +129,39 @@ def _run_job(jid):
                     vbs_path = os.path.join(remote_folder, vbs_name)
                     result_path = os.path.join(remote_folder, result_name)
 
-                    # Clean old result
-                    try: os.remove(result_path)
-                    except: pass
+                    # Clean old result file
+                    try:
+                        os.remove(result_path)
+                    except:
+                        pass
 
-                    # Write VBS to remote folder (uses script-relative paths)
+                    # Write VBS to remote share
                     vbs_code = _make_vbs(excel_file, macro_name, target_cell,
                                          safe_cat, result_name)
                     with open(vbs_path, "w", encoding="utf-8") as f:
                         f.write(vbs_code)
 
                     D.add_log(jid, qid, mid, "INFO", "VBS_READY",
-                              f"VBS written to {vbs_path}")
+                              f"VBS: {vbs_path}")
 
-                    # Execute VBS
-                    _execute_vbs(vbs_path, hostname, username, password,
-                                 jid, qid, mid, mname)
+                    # Execute VBS on the remote machine
+                    _execute_on_remote(
+                        vbs_path=vbs_path,
+                        hostname=hostname,
+                        username=username,
+                        password=password,
+                        task_name=task_name,
+                        jid=jid, qid=qid, mid=mid, mname=mname
+                    )
 
-                    # Poll for result
-                    timeout_secs = int(D.get_setting("macro_timeout", "600"))
-                    got_result = _poll_result(result_path, timeout_secs, jid, qid, mid, mname)
+                    # Poll result file
+                    timeout_secs = int(D.get_setting("macro_timeout", "1800"))
+                    got_result = _poll_result(result_path, timeout_secs,
+                                              jid, qid, mid, mname)
 
                     if not got_result:
-                        raise RuntimeError(f"Timeout ({timeout_secs}s) waiting for macro")
+                        raise RuntimeError(
+                            f"Timeout ({timeout_secs}s) waiting for macro on {mname}")
 
                     # Read result
                     result_text = ""
@@ -142,58 +172,79 @@ def _run_job(jid):
                         result_text = "UNKNOWN"
 
                     if result_text.startswith("ERROR"):
-                        raise RuntimeError(f"Macro: {result_text}")
+                        raise RuntimeError(result_text)
 
                     D.add_log(jid, qid, mid, "INFO", "MACRO_DONE",
-                              f"{mname}: '{cat}' -> {result_text[:80]}")
+                              f"{mname}: '{cat}' -> {result_text[:100]}")
 
                     # Collect output files
-                    new_files = _collect_output(remote_folder, files, compile_dir,
-                                                today, group_name, mname, cat,
-                                                jid, qid, mid)
+                    new_files = _collect_output(
+                        remote_folder, files, compile_dir,
+                        today, group_name, mname, cat,
+                        jid, qid, mid)
 
                     elapsed = (datetime.now() - start).total_seconds()
                     D.finish_queue_item(qid, "SUCCESS",
                         finished_at=datetime.now().isoformat(),
-                        date_folder=remote_folder, duration_secs=elapsed,
+                        date_folder=remote_folder,
+                        duration_secs=elapsed,
                         output_files=json.dumps(new_files) if new_files else "")
                     D.add_log(jid, qid, mid, "INFO", "CAT_DONE",
-                              f"{mname}: '{cat}' done in {elapsed:.1f}s ({len(new_files)} outputs)")
+                              f"{mname}: '{cat}' done in {elapsed:.1f}s "
+                              f"({len(new_files)} outputs)")
 
                 except Exception as e:
                     elapsed = (datetime.now() - start).total_seconds()
                     D.finish_queue_item(qid, "FAILED",
                         finished_at=datetime.now().isoformat(),
-                        error_message=str(e)[:500], duration_secs=elapsed)
+                        error_message=str(e)[:500],
+                        duration_secs=elapsed)
                     D.add_log(jid, qid, mid, "ERROR", "CAT_FAIL",
                               f"{mname}: '{cat}' failed: {e}")
                     N.notify_macro_failure(jid, qid, mname,
                         m["ip_address"], excel_file, macro_name, str(e), cat)
+
                 finally:
-                    # Cleanup VBS + result
+                    # Cleanup VBS + result + scheduled task
                     for fp in [vbs_path, result_path]:
                         if fp:
-                            try: os.remove(fp)
-                            except: pass
+                            try:
+                                os.remove(fp)
+                            except:
+                                pass
+                    # Delete remote scheduled task (fire and forget)
+                    if hostname:
+                        try:
+                            subprocess.run(
+                                ["schtasks", "/delete", "/s", hostname,
+                                 "/tn", task_name, "/f"],
+                                capture_output=True, timeout=10)
+                        except:
+                            pass
 
-        # Launch workers
+        # Launch one worker thread per machine
         with ThreadPoolExecutor(max_workers=len(machine_ready)) as pool:
             futs = [pool.submit(machine_worker, mid, rf)
                     for mid, rf in machine_ready.items()]
             for w in as_completed(futs):
-                try: w.result()
+                try:
+                    w.result()
                 except Exception as e:
-                    D.add_log(jid, level="ERROR", step="WORKER_CRASH", message=str(e))
+                    D.add_log(jid, level="ERROR", step="WORKER_CRASH",
+                              message=str(e))
 
-        # Finalize
+        # Finalize job
         if _kill_jobs.get(jid):
             with D.db() as c:
-                c.execute("UPDATE jobs SET status='KILLED',finished_at=? WHERE job_id=?",
-                          (datetime.now().isoformat(), jid))
-            D.add_log(jid, level="WARN", step="KILLED", message=f"Job #{jid} killed")
+                c.execute(
+                    "UPDATE jobs SET status='KILLED',finished_at=? WHERE job_id=?",
+                    (datetime.now().isoformat(), jid))
+            D.add_log(jid, level="WARN", step="KILLED",
+                      message=f"Job #{jid} killed")
         else:
             D.finish_job(jid)
-            D.add_log(jid, level="INFO", step="JOB_DONE", message=f"Job #{jid} completed")
+            D.add_log(jid, level="INFO", step="JOB_DONE",
+                      message=f"Job #{jid} completed")
 
         # Tracker CSV
         track_collected_files(jid)
@@ -204,25 +255,28 @@ def _run_job(jid):
             fails = []
             for q in D.get_queue(jid):
                 if q["status"] == "FAILED":
-                    fails.append({"machine": q["machine_name"] or "?",
-                                  "ip": q["ip_address"] or "",
-                                  "step": f"CAT:{q['cat_value']}",
-                                  "error": q["error_message"] or ""})
+                    fails.append({
+                        "machine": q["machine_name"] or "?",
+                        "ip": q["ip_address"] or "",
+                        "step": f"CAT:{q['cat_value']}",
+                        "error": q["error_message"] or ""
+                    })
             N.notify_job_summary(jid, group_name, job["total_cats"],
                                  job["completed_cats"], job["failed_cats"], fails)
 
     except Exception as e:
         D.add_log(jid, level="ERROR", step="JOB_CRASH", message=str(e))
         with D.db() as c:
-            c.execute("UPDATE jobs SET status='CRASHED',finished_at=? WHERE job_id=?",
-                      (datetime.now().isoformat(), jid))
+            c.execute(
+                "UPDATE jobs SET status='CRASHED',finished_at=? WHERE job_id=?",
+                (datetime.now().isoformat(), jid))
     finally:
         _running_jobs.pop(jid, None)
         _kill_jobs.pop(jid, None)
 
 
 # =====================================================================
-#  PREP MACHINE (copy files ONCE)
+#  PREP MACHINE (auth + create folder + copy files ONCE)
 # =====================================================================
 
 def _prep_machine(machine, today, files, jid):
@@ -233,7 +287,7 @@ def _prep_machine(machine, today, files, jid):
     mid = machine["machine_id"]
     mname = machine["machine_name"]
 
-    # Authenticate
+    # Authenticate to share
     if shared.startswith("\\\\") and username and password:
         _net_use(shared, username, password, jid, mid)
 
@@ -248,15 +302,15 @@ def _prep_machine(machine, today, files, jid):
         else:
             raise
 
-    # Copy ALL files in parallel (this happens ONCE per machine)
-    D.add_log(jid, machine_id=mid, level="INFO", step="PREP_START",
+    # Copy files in parallel
+    D.add_log(jid, machine_id=mid, level="INFO", step="PREP_COPY",
               message=f"{mname}: copying {len(files)} files")
 
     def copy_one(f):
         dst = os.path.join(date_folder, f["original_name"])
         shutil.copy2(f["stored_path"], dst)
         sz = os.path.getsize(dst) / 1024 / 1024
-        D.add_log(jid, machine_id=mid, level="INFO", step="FILE_COPY_OK",
+        D.add_log(jid, machine_id=mid, level="INFO", step="FILE_OK",
                   message=f"{f['original_name']} ({sz:.1f}MB)")
 
     with ThreadPoolExecutor(max_workers=min(len(files), 4)) as pool:
@@ -265,7 +319,7 @@ def _prep_machine(machine, today, files, jid):
             fut.result()
 
     D.add_log(jid, machine_id=mid, level="INFO", step="PREP_OK",
-              message=f"{mname}: all {len(files)} files copied to {date_folder}")
+              message=f"{mname}: ready ({date_folder})")
     return date_folder
 
 
@@ -276,7 +330,6 @@ def _prep_machine(machine, today, files, jid):
 def _net_use(unc_path, username, password, jid=None, mid=None):
     clean = unc_path.replace("/", "\\").rstrip("\\")
     parts = [p for p in clean.split("\\") if p]
-
     if len(parts) >= 2:
         server_share = f"\\\\{parts[0]}\\{parts[1]}"
     elif len(parts) == 1:
@@ -286,77 +339,60 @@ def _net_use(unc_path, username, password, jid=None, mid=None):
 
     D.add_log(jid, machine_id=mid, level="INFO", step="NET_USE",
               message=f"net use {server_share} /user:{username}")
-
     try:
         subprocess.run(["net", "use", server_share, "/delete", "/y"],
                        capture_output=True, timeout=10)
-    except: pass
-
+    except:
+        pass
     time.sleep(0.5)
-
     r = subprocess.run(
-        ["net", "use", server_share, f"/user:{username}", password, "/persistent:no"],
-        capture_output=True, text=True, timeout=15
-    )
+        ["net", "use", server_share, f"/user:{username}", password,
+         "/persistent:no"],
+        capture_output=True, text=True, timeout=15)
     if r.returncode != 0:
         err = (r.stderr.strip() or r.stdout.strip())[:200]
         D.add_log(jid, machine_id=mid, level="WARN", step="NET_USE",
-                  message=f"net use {server_share} failed: {err}")
+                  message=f"net use failed: {err}")
     else:
         D.add_log(jid, machine_id=mid, level="INFO", step="NET_USE",
-                  message=f"OK: authenticated to {server_share}")
+                  message=f"OK: {server_share}")
 
 
 # =====================================================================
-#  VBS GENERATION (self-contained, script-relative paths)
+#  VBS GENERATION - BULLETPROOF
+#  No blanket On Error Resume Next. Targeted error handling only.
+#  Maps drive letter if UNC path. ALWAYS writes result file.
 # =====================================================================
 
 def _make_vbs(excel_file, macro_name, target_cell, cat_value, result_filename):
-    """
-    VBS that:
-    1. Finds its own folder
-    2. If UNC path -> maps a temp drive letter (Excel COM cant open UNC)
-    3. Opens Excel from mapped drive or local path
-    4. Pastes category -> runs macro -> saves
-    5. Writes result file, unmaps drive
-    """
-    return f'''On Error Resume Next
-
-Dim fso, scriptFolder, workFolder, excelPath, resultFile, mappedDrive
+    return f'''
+Dim fso, scriptFolder, workFolder, excelPath, resultPath, mappedDrive
 Set fso = CreateObject("Scripting.FileSystemObject")
+
+' Get script's own folder
 scriptFolder = fso.GetParentFolderName(WScript.ScriptFullName)
 If Right(scriptFolder, 1) <> "\\" Then scriptFolder = scriptFolder & "\\"
 
-' Result file always via original path (for polling from server)
-resultFile = scriptFolder & "{result_filename}"
+' Result file is ALWAYS written to script folder (server polls this via UNC)
+resultPath = scriptFolder & "{result_filename}"
 
-' Mark as running
-Dim rf
-Set rf = fso.CreateTextFile(resultFile, True)
-rf.Write "RUNNING"
-rf.Close
+' Write RUNNING marker
+Call WriteResult("RUNNING")
 
-' If UNC path, map a drive letter (Excel COM cannot open UNC paths)
+' === STEP 1: Map drive letter if UNC path ===
 workFolder = scriptFolder
 mappedDrive = ""
 
 If Left(scriptFolder, 2) = "\\\\" Then
-    ' Find a free drive letter (Z down to M)
-    Dim dl, letters
+    Dim letters, dl, wshShell
     letters = Array("Z","Y","X","W","V","U","T","S","R","Q","P","O","N","M")
-    Dim wshNetwork
-    Set wshNetwork = CreateObject("WScript.Network")
-    Dim wshShell
     Set wshShell = CreateObject("WScript.Shell")
 
     For Each dl In letters
         If Not fso.DriveExists(dl & ":") Then
-            ' Map this drive to the UNC folder
-            Dim mapCmd
-            mapCmd = "net use " & dl & ": """ & Left(scriptFolder, Len(scriptFolder)-1) & """ /persistent:no"
-            wshShell.Run "cmd /c " & mapCmd, 0, True
-            WScript.Sleep 500
-
+            Dim mapResult
+            mapResult = wshShell.Run("cmd /c net use " & dl & ": """ & Left(scriptFolder, Len(scriptFolder)-1) & """ /persistent:no", 0, True)
+            WScript.Sleep 1000
             If fso.DriveExists(dl & ":") Then
                 mappedDrive = dl & ":"
                 workFolder = mappedDrive & "\\"
@@ -364,146 +400,265 @@ If Left(scriptFolder, 2) = "\\\\" Then
             End If
         End If
     Next
+
+    If mappedDrive = "" Then
+        Call WriteResult("ERROR_DRIVE:Could not map any drive letter for UNC path")
+        WScript.Quit 1
+    End If
 End If
 
 excelPath = workFolder & "{excel_file}"
 
-' Check file exists
+' === STEP 2: Verify Excel file exists ===
 If Not fso.FileExists(excelPath) Then
-    Set rf = fso.CreateTextFile(resultFile, True)
-    rf.Write "ERROR_OPEN:File not found: " & excelPath
-    rf.Close
-    GoTo Cleanup
+    Call WriteResult("ERROR_OPEN:File not found: " & excelPath)
+    Call UnmapDrive
+    WScript.Quit 1
 End If
 
-' Start Excel
+' === STEP 3: Start Excel ===
+On Error Resume Next
 Dim xlApp
 Set xlApp = CreateObject("Excel.Application")
 If Err.Number <> 0 Then
-    Set rf = fso.CreateTextFile(resultFile, True)
-    rf.Write "ERROR_OPEN:Cannot start Excel: " & Err.Description
-    rf.Close
-    GoTo Cleanup
+    Call WriteResult("ERROR_OPEN:Cannot start Excel: " & Err.Description)
+    On Error GoTo 0
+    Call UnmapDrive
+    WScript.Quit 1
 End If
+On Error GoTo 0
 
 xlApp.Visible = False
 xlApp.DisplayAlerts = False
 xlApp.AskToUpdateLinks = False
 xlApp.EnableEvents = False
-Err.Clear
 
-' Open workbook from local/mapped path
+' === STEP 4: Open workbook ===
+On Error Resume Next
 Dim xlWb
 Set xlWb = xlApp.Workbooks.Open(excelPath, 0, False)
 If Err.Number <> 0 Then
-    Set rf = fso.CreateTextFile(resultFile, True)
-    rf.Write "ERROR_OPEN:" & Err.Number & ":" & Err.Description & " Path=" & excelPath
-    rf.Close
+    Dim openErr
+    openErr = "ERROR_OPEN:" & Err.Number & ":" & Err.Description & " [" & excelPath & "]"
+    On Error GoTo 0
+    Call WriteResult(openErr)
     xlApp.Quit: Set xlApp = Nothing
-    GoTo Cleanup
+    Call UnmapDrive
+    WScript.Quit 1
 End If
-Err.Clear
+On Error GoTo 0
 
-' Paste category
+' === STEP 5: Paste category value ===
+On Error Resume Next
 xlWb.Sheets(1).Range("{target_cell}").Value = "{cat_value}"
 If Err.Number <> 0 Then
-    Set rf = fso.CreateTextFile(resultFile, True)
-    rf.Write "ERROR_PASTE:" & Err.Number & ":" & Err.Description
-    rf.Close
+    Dim pasteErr
+    pasteErr = "ERROR_PASTE:" & Err.Number & ":" & Err.Description
+    On Error GoTo 0
+    Call WriteResult(pasteErr)
     xlWb.Close False: xlApp.Quit: Set xlApp = Nothing
-    GoTo Cleanup
+    Call UnmapDrive
+    WScript.Quit 1
 End If
-Err.Clear
+On Error GoTo 0
 
-' Run macro
+' === STEP 6: Run macro ===
+On Error Resume Next
 xlApp.Run "{macro_name}"
 If Err.Number <> 0 Then
-    Set rf = fso.CreateTextFile(resultFile, True)
-    rf.Write "ERROR_MACRO:" & Err.Number & ":" & Err.Description
-    rf.Close
+    Dim macroErr
+    macroErr = "ERROR_MACRO:" & Err.Number & ":" & Err.Description
+    On Error GoTo 0
+    Call WriteResult(macroErr)
     xlWb.Close False: xlApp.Quit: Set xlApp = Nothing
-    GoTo Cleanup
+    Call UnmapDrive
+    WScript.Quit 1
 End If
+On Error GoTo 0
 
-' Save and close
+' === STEP 7: Save and close ===
+On Error Resume Next
 xlWb.Save
 xlWb.Close False
 xlApp.Quit
 Set xlApp = Nothing
+On Error GoTo 0
 
-' Write success
-Set rf = fso.CreateTextFile(resultFile, True)
-rf.Write "SUCCESS"
-rf.Close
-
-Cleanup:
-' Unmap drive if we mapped one
-If mappedDrive <> "" Then
-    Dim unmapCmd
-    Set wshShell = CreateObject("WScript.Shell")
-    unmapCmd = "net use " & mappedDrive & " /delete /y"
-    wshShell.Run "cmd /c " & unmapCmd, 0, True
-End If
-
+' === DONE ===
+Call WriteResult("SUCCESS")
+Call UnmapDrive
 WScript.Quit 0
+
+
+' ---- Helper: Write result file ----
+Sub WriteResult(msg)
+    Dim f
+    Set f = fso.CreateTextFile(resultPath, True)
+    f.Write msg
+    f.Close
+End Sub
+
+' ---- Helper: Unmap drive ----
+Sub UnmapDrive()
+    If mappedDrive <> "" Then
+        Dim sh
+        Set sh = CreateObject("WScript.Shell")
+        sh.Run "cmd /c net use " & mappedDrive & " /delete /y", 0, True
+    End If
+End Sub
 '''
 
 
 # =====================================================================
-#  EXECUTE VBS (try remote first, then local)
+#  EXECUTE VBS ON REMOTE MACHINE
+#  Priority: schtasks -> psexec -> local cscript
 # =====================================================================
 
-def _execute_vbs(vbs_path, hostname, username, password, jid, qid, mid, mname):
-    """Execute VBS. Detect local machine, try wmic for remote, fall back to cscript."""
+def _execute_on_remote(vbs_path, hostname, username, password, task_name,
+                       jid, qid, mid, mname):
+    """Execute VBS on the target machine."""
     vbs_win = vbs_path.replace("/", "\\")
 
-    # Check if target is the LOCAL machine
-    is_local = False
-    if hostname:
-        import socket
-        local_names = {
-            socket.gethostname().lower(),
-            "localhost", "127.0.0.1", "."
-        }
-        try:
-            local_names.add(socket.getfqdn().lower())
-        except: pass
-        is_local = hostname.lower() in local_names
+    # Detect if target is the local machine
+    is_local = _is_local_machine(hostname)
 
     if is_local or not hostname:
-        # Direct local execution - no wmic/psexec needed
         D.add_log(jid, qid, mid, "INFO", "EXEC_LOCAL",
-                  f"Local execution: cscript {vbs_win}")
+                  f"Local: cscript {vbs_win}")
         subprocess.Popen(
             ["cscript", "//NoLogo", vbs_win],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-        )
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         return
 
-    # Remote machine - try wmic then psexec
-    ok = _try_wmic(vbs_win, hostname, username, password, jid, qid, mid, mname)
+    # === REMOTE MACHINE ===
+
+    # Method 1: schtasks (built into every Windows, no extra tools)
+    ok = _try_schtasks(vbs_win, hostname, username, password, task_name,
+                       jid, qid, mid, mname)
     if ok:
         return
 
+    # Method 2: psexec (if installed)
     psexec_path = D.get_setting("psexec_path", "psexec")
     ok = _try_psexec(vbs_win, hostname, username, password, psexec_path,
                      jid, qid, mid, mname)
     if ok:
         return
 
-    # Fallback to local cscript
+    # Method 3: wmic
+    ok = _try_wmic(vbs_win, hostname, username, password,
+                   jid, qid, mid, mname)
+    if ok:
+        return
+
+    # Fallback: local cscript (macro runs on server, not ideal)
     D.add_log(jid, qid, mid, "WARN", "EXEC_FALLBACK",
-              f"Remote failed, using local cscript")
+              f"All remote methods failed. Running locally on server.")
     subprocess.Popen(
         ["cscript", "//NoLogo", vbs_win],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-    )
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
 
 
-def _try_wmic(vbs_path, hostname, username, password, jid, qid, mid, mname):
-    """Execute on remote via wmic process call create. Returns True if OK."""
+def _is_local_machine(hostname):
+    """Check if hostname refers to this machine."""
+    if not hostname:
+        return True
+    import socket
+    local_names = {"localhost", "127.0.0.1", "."}
+    try:
+        local_names.add(socket.gethostname().lower())
+        local_names.add(socket.getfqdn().lower())
+    except:
+        pass
+    return hostname.lower() in local_names
+
+
+def _try_schtasks(vbs_path, hostname, username, password, task_name,
+                  jid, qid, mid, mname):
+    """
+    Create + run a scheduled task on the remote machine.
+    Task runs cscript with the VBS. This ensures VBS runs ON the remote PC.
+    """
+    task_cmd = f'cscript //NoLogo "{vbs_path}"'
+
+    # Create task on remote machine
+    create_cmd = [
+        "schtasks", "/create",
+        "/s", hostname,
+        "/tn", task_name,
+        "/tr", task_cmd,
+        "/sc", "once",
+        "/st", "00:00",
+        "/f",  # force overwrite
+        "/rl", "highest",  # run with highest privileges
+    ]
+    if username:
+        create_cmd += ["/ru", username]
+        if password:
+            create_cmd += ["/rp", password]
+
+    D.add_log(jid, qid, mid, "INFO", "EXEC_SCHTASKS",
+              f"Creating task '{task_name}' on {hostname}")
+
+    try:
+        r = subprocess.run(create_cmd, capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            err = (r.stderr.strip() or r.stdout.strip())[:200]
+            D.add_log(jid, qid, mid, "WARN", "EXEC_SCHTASKS",
+                      f"Create failed: {err}")
+            return False
+
+        # Run the task
+        run_cmd = ["schtasks", "/run", "/s", hostname, "/tn", task_name]
+        r2 = subprocess.run(run_cmd, capture_output=True, text=True, timeout=15)
+        if r2.returncode != 0:
+            err = (r2.stderr.strip() or r2.stdout.strip())[:200]
+            D.add_log(jid, qid, mid, "WARN", "EXEC_SCHTASKS",
+                      f"Run failed: {err}")
+            return False
+
+        D.add_log(jid, qid, mid, "INFO", "EXEC_SCHTASKS",
+                  f"Task running on {hostname}")
+        return True
+
+    except Exception as e:
+        D.add_log(jid, qid, mid, "WARN", "EXEC_SCHTASKS", f"Error: {e}")
+        return False
+
+
+def _try_psexec(vbs_path, hostname, username, password, psexec_path,
+                jid, qid, mid, mname):
+    """Execute via PsExec with -i (interactive session for Excel)."""
+    cmd = [psexec_path, f"\\\\{hostname}", "-accepteula", "-d", "-i"]
+    if username:
+        cmd += ["-u", username]
+    if password:
+        cmd += ["-p", password]
+    cmd += ["cscript", "//NoLogo", vbs_path]
+
+    D.add_log(jid, qid, mid, "INFO", "EXEC_PSEXEC",
+              f"PsExec -> {hostname}")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.returncode in (0, -1):
+            D.add_log(jid, qid, mid, "INFO", "EXEC_PSEXEC",
+                      f"Launched on {hostname}")
+            return True
+        D.add_log(jid, qid, mid, "WARN", "EXEC_PSEXEC",
+                  f"exit={r.returncode}: {(r.stderr or r.stdout)[:150]}")
+    except FileNotFoundError:
+        D.add_log(jid, qid, mid, "WARN", "EXEC_PSEXEC",
+                  f"psexec not found at '{psexec_path}'")
+    except Exception as e:
+        D.add_log(jid, qid, mid, "WARN", "EXEC_PSEXEC", f"Error: {e}")
+    return False
+
+
+def _try_wmic(vbs_path, hostname, username, password,
+              jid, qid, mid, mname):
+    """Execute via wmic process call create."""
     wmic_cmd = f'cscript //NoLogo "{vbs_path}"'
     cmd = ["wmic", f"/node:{hostname}"]
     if username:
@@ -513,42 +668,18 @@ def _try_wmic(vbs_path, hostname, username, password, jid, qid, mid, mname):
     cmd += ["process", "call", "create", wmic_cmd]
 
     D.add_log(jid, qid, mid, "INFO", "EXEC_WMIC",
-              f"wmic /node:{hostname} process call create cscript...")
+              f"wmic /node:{hostname} ...")
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         out = (r.stdout + r.stderr).strip()
-        if "ReturnValue = 0" in out or r.returncode == 0:
-            D.add_log(jid, qid, mid, "INFO", "EXEC_WMIC", f"Process created on {hostname}")
+        if "ReturnValue = 0" in out:
+            D.add_log(jid, qid, mid, "INFO", "EXEC_WMIC",
+                      f"Process created on {hostname}")
             return True
-        D.add_log(jid, qid, mid, "WARN", "EXEC_WMIC", f"wmic: {out[:150]}")
+        D.add_log(jid, qid, mid, "WARN", "EXEC_WMIC",
+                  f"wmic: {out[:150]}")
     except Exception as e:
-        D.add_log(jid, qid, mid, "WARN", "EXEC_WMIC", f"wmic error: {e}")
-    return False
-
-
-def _try_psexec(vbs_path, hostname, username, password, psexec_path,
-                jid, qid, mid, mname):
-    """Execute on remote via PsExec. Returns True if OK."""
-    cmd = [psexec_path, f"\\\\{hostname}", "-accepteula", "-d",
-           "-i"]  # -i = interactive session (needed for Excel)
-    if username:
-        cmd += ["-u", username]
-    if password:
-        cmd += ["-p", password]
-    cmd += ["cscript", "//NoLogo", vbs_path]
-
-    D.add_log(jid, qid, mid, "INFO", "EXEC_PSEXEC", f"PsExec -> {hostname}")
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if r.returncode in (0, -1):
-            D.add_log(jid, qid, mid, "INFO", "EXEC_PSEXEC", f"Launched on {hostname}")
-            return True
-        D.add_log(jid, qid, mid, "WARN", "EXEC_PSEXEC",
-                  f"exit={r.returncode}: {(r.stderr or r.stdout)[:150]}")
-    except FileNotFoundError:
-        D.add_log(jid, qid, mid, "WARN", "EXEC_PSEXEC", f"psexec not found at '{psexec_path}'")
-    except Exception as e:
-        D.add_log(jid, qid, mid, "WARN", "EXEC_PSEXEC", f"error: {e}")
+        D.add_log(jid, qid, mid, "WARN", "EXEC_WMIC", f"Error: {e}")
     return False
 
 
@@ -557,7 +688,7 @@ def _try_psexec(vbs_path, hostname, username, password, psexec_path,
 # =====================================================================
 
 def _poll_result(result_path, timeout_secs, jid, qid, mid, mname):
-    """Poll result file every 3s until SUCCESS/ERROR or timeout."""
+    """Poll _result file every 5s. Returns True when done."""
     start = time.time()
     last_log = 0
 
@@ -569,18 +700,19 @@ def _poll_result(result_path, timeout_secs, jid, qid, mid, mname):
             if os.path.exists(result_path):
                 with open(result_path, "r", encoding="utf-8") as f:
                     content = f.read().strip()
+                # Done when result is not empty and not "RUNNING"
                 if content and content != "RUNNING":
                     return True
         except:
             pass
 
         elapsed = time.time() - start
-        if elapsed - last_log >= 30:
+        if elapsed - last_log >= 60:
             D.add_log(jid, qid, mid, "INFO", "WAITING",
-                      f"{mname}: waiting for macro ({int(elapsed)}s)")
+                      f"{mname}: macro running ({int(elapsed)}s)")
             last_log = elapsed
 
-        time.sleep(3)
+        time.sleep(5)
 
     return False
 
@@ -591,7 +723,6 @@ def _poll_result(result_path, timeout_secs, jid, qid, mid, mname):
 
 def _collect_output(remote_folder, files, compile_dir, today, group_name,
                     mname, cat, jid, qid, mid):
-    """Copy NEW output files from remote to compile dir."""
     original_names = {f["original_name"] for f in files}
     skip_prefixes = ("_run_", "_result_", "_macro_", "~$")
     new_files = []
@@ -607,7 +738,8 @@ def _collect_output(remote_folder, files, compile_dir, today, group_name,
                 continue
             new_files.append(fname)
     except Exception as e:
-        D.add_log(jid, qid, mid, "WARN", "COLLECT", f"Cannot list folder: {e}")
+        D.add_log(jid, qid, mid, "WARN", "COLLECT",
+                  f"Cannot list folder: {e}")
         return []
 
     if new_files:
@@ -619,9 +751,11 @@ def _collect_output(remote_folder, files, compile_dir, today, group_name,
                 dst = os.path.join(out_dir, nf)
                 shutil.copy2(src, dst)
                 sz = os.path.getsize(dst) / 1024
-                D.add_log(jid, qid, mid, "INFO", "OUTPUT", f"Collected: {nf} ({sz:.1f}KB)")
+                D.add_log(jid, qid, mid, "INFO", "OUTPUT",
+                          f"Collected: {nf} ({sz:.1f}KB)")
             except Exception as e:
-                D.add_log(jid, qid, mid, "WARN", "OUTPUT", f"Failed: {nf}: {e}")
+                D.add_log(jid, qid, mid, "WARN", "OUTPUT",
+                          f"Failed: {nf}: {e}")
 
     return new_files
 
@@ -631,11 +765,9 @@ def _collect_output(remote_folder, files, compile_dir, today, group_name,
 # =====================================================================
 
 def track_collected_files(jid):
-    """Create tracker CSV listing all collected output files."""
     job = D.get_job(jid)
     if not job:
         return
-
     today = datetime.now().strftime("%Y-%m-%d")
     group_name = job["group_name"]
     compile_base = D.get_setting("compile_path", "") or COMPILED_DIR
@@ -643,31 +775,37 @@ def track_collected_files(jid):
 
     try:
         os.makedirs(compile_root, exist_ok=True)
-        tracker_path = os.path.join(compile_root,
-                                    f"TRACKER_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        tracker_path = os.path.join(
+            compile_root,
+            f"TRACKER_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
 
         collected = []
         for item in D.get_queue(jid):
-            item_dict = dict(item)
-            if item_dict.get("output_files"):
+            d = dict(item)
+            if d.get("output_files"):
                 try:
-                    for fname in json.loads(item_dict["output_files"]):
+                    for fname in json.loads(d["output_files"]):
                         collected.append({
-                            "job_id": jid, "date": today, "group": group_name,
-                            "machine": item_dict.get("machine_name") or "Unknown",
-                            "category": item_dict["cat_value"],
+                            "job_id": jid, "date": today,
+                            "group": group_name,
+                            "machine": d.get("machine_name") or "?",
+                            "category": d["cat_value"],
                             "filename": fname,
                             "collected_at": datetime.now().isoformat()
                         })
-                except: pass
+                except:
+                    pass
 
         with open(tracker_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=["job_id","date","group","machine",
-                                               "category","filename","collected_at"])
+            w = csv.DictWriter(f, fieldnames=[
+                "job_id", "date", "group", "machine",
+                "category", "filename", "collected_at"])
             w.writeheader()
             w.writerows(collected)
 
         D.add_log(jid, level="INFO", step="TRACKER",
-                  message=f"Tracker: {os.path.basename(tracker_path)} ({len(collected)} files)")
+                  message=f"{os.path.basename(tracker_path)} "
+                          f"({len(collected)} files)")
     except Exception as e:
-        D.add_log(jid, level="WARN", step="TRACKER", message=f"Tracker failed: {e}")
+        D.add_log(jid, level="WARN", step="TRACKER",
+                  message=f"Tracker failed: {e}")
