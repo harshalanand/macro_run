@@ -385,10 +385,22 @@ def finish_queue_item(qid, status, **kw):
 
 def finish_job(jid):
     with db() as c:
-        s = c.execute("SELECT SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) ok, SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) fail FROM job_queue WHERE job_id=?", (jid,)).fetchone()
-        st = "COMPLETED" if (s["fail"] or 0)==0 else "COMPLETED_WITH_ERRORS"
+        s = c.execute("""SELECT 
+            SUM(CASE WHEN status='SUCCESS' THEN 1 ELSE 0 END) ok, 
+            SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) fail,
+            SUM(CASE WHEN status IN ('QUEUED','CANCELLED') THEN 1 ELSE 0 END) unrun
+            FROM job_queue WHERE job_id=?""", (jid,)).fetchone()
+        ok = s["ok"] or 0
+        fail = s["fail"] or 0
+        unrun = s["unrun"] or 0
+        if ok == 0 and fail == 0:
+            st = "FAILED"  # Nothing ran at all (prep failed)
+        elif fail > 0 or unrun > 0:
+            st = "COMPLETED_WITH_ERRORS"
+        else:
+            st = "COMPLETED"
         c.execute("UPDATE jobs SET status=?,finished_at=?,completed_cats=?,failed_cats=? WHERE job_id=?",
-            (st, datetime.now().isoformat(), s["ok"] or 0, s["fail"] or 0, jid))
+            (st, datetime.now().isoformat(), ok, fail, jid))
 
 # ── LOGS ────────────────────────────────────────────────
 def add_log(job_id=None, queue_id=None, machine_id=None, level="INFO", step="", message="", details=""):
