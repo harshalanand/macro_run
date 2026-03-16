@@ -102,9 +102,9 @@ async def delete_group(gid: int):
 
 @app.post("/api/groups/{gid}/machines")
 async def add_machine(gid: int, machine_name:str=Form(...), system_name:str=Form(""),
-    ip_address:str=Form(""), shared_folder:str=Form(...), username:str=Form(""),
-    password:str=Form(""), department:str=Form(""), location:str=Form("")):
-    D.add_machine(gid, machine_name, system_name, ip_address, shared_folder, username, password, department, location)
+    ip_address:str=Form(""), shared_folder:str=Form(...), remote_path:str=Form(""),
+    username:str=Form(""), password:str=Form(""), department:str=Form(""), location:str=Form("")):
+    D.add_machine(gid, machine_name, system_name, ip_address, shared_folder, remote_path, username, password, department, location)
     return RedirectResponse(f"/groups/{gid}", 303)
 
 @app.post("/api/machines/{mid}/delete")
@@ -121,12 +121,12 @@ async def toggle_machine(mid: int):
 
 @app.post("/api/machines/{mid}/edit")
 async def edit_machine(mid: int, machine_name:str=Form(...), system_name:str=Form(""),
-    ip_address:str=Form(""), shared_folder:str=Form(...), username:str=Form(""),
-    password:str=Form(""), department:str=Form(""), location:str=Form("")):
+    ip_address:str=Form(""), shared_folder:str=Form(...), remote_path:str=Form(""),
+    username:str=Form(""), password:str=Form(""), department:str=Form(""), location:str=Form("")):
     m = D.get_machine(mid)
     D.update_machine(mid, machine_name=machine_name, system_name=system_name,
-        ip_address=ip_address, shared_folder=shared_folder, username=username,
-        password=password, department=department, location=location)
+        ip_address=ip_address, shared_folder=shared_folder, remote_path=remote_path,
+        username=username, password=password, department=department, location=location)
     return RedirectResponse(f"/groups/{m['group_id']}" if m else "/groups", 303)
 
 @app.post("/api/groups/{gid}/import-machines")
@@ -140,6 +140,7 @@ async def import_machines(gid: int, file: UploadFile = File(...)):
             "system_name": (row.get("system_name") or row.get("hostname","")).strip(),
             "ip": (row.get("ip") or row.get("ip_address","")).strip(),
             "shared_folder": (row.get("shared_folder") or row.get("folder","")).strip(),
+            "remote_path": (row.get("remote_path") or row.get("local_path","")).strip(),
             "username": (row.get("username") or row.get("user","")).strip(),
             "password": (row.get("password") or "").strip(),
             "department": (row.get("department") or row.get("dept","")).strip(),
@@ -282,9 +283,9 @@ async def test_email():
 async def tpl_machines():
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["name","system_name","ip","shared_folder","username","password","department","location"])
-    w.writerow(["PC-SALES-01","PCSAL01","192.168.1.101","\\\\192.168.1.101\\Share\\Macro","admin","pass123","Sales","Floor 2"])
-    w.writerow(["PC-FIN-01","PCFIN01","192.168.1.110","\\\\PCFIN01\\Reports\\Macro","admin","pass123","Finance","Floor 3"])
+    w.writerow(["name","system_name","ip","shared_folder","remote_path","username","password","department","location"])
+    w.writerow(["PC-SALES-01","PCSAL01","192.168.1.101","\\\\PCSAL01\\Share\\Macro","D:\\Share\\Macro","admin","pass123","Sales","Floor 2"])
+    w.writerow(["PC-FIN-01","PCFIN01","192.168.1.110","\\\\PCFIN01\\Reports\\Macro","E:\\Reports\\Macro","admin","pass123","Finance","Floor 3"])
     buf.seek(0)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=machines_template.csv"})

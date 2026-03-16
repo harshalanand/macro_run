@@ -52,6 +52,7 @@ def init_db():
             system_name   TEXT DEFAULT '',
             ip_address    TEXT DEFAULT '',
             shared_folder TEXT NOT NULL,
+            remote_path   TEXT DEFAULT '',
             username      TEXT DEFAULT '',
             password      TEXT DEFAULT '',
             department    TEXT DEFAULT '',
@@ -147,6 +148,12 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_queue_status ON job_queue(status);
         CREATE INDEX IF NOT EXISTS idx_logs_job ON run_logs(job_id);
         """)
+        # Migration: add remote_path if missing
+        try:
+            c.execute("SELECT remote_path FROM machines LIMIT 1")
+        except:
+            c.execute("ALTER TABLE machines ADD COLUMN remote_path TEXT DEFAULT ''")
+
 
 # ── SETTINGS ────────────────────────────────────────────
 def get_setting(key, default=""):
@@ -201,14 +208,8 @@ def delete_group(gid):
                 if r["stored_path"] and os.path.exists(r["stored_path"]):
                     os.remove(r["stored_path"])
             except: pass
-        # manual cascade for safety
-        c.execute("DELETE FROM items WHERE group_id=?", (gid,))
-        c.execute("DELETE FROM group_files WHERE group_id=?", (gid,))
-        mids = [r["machine_id"] for r in c.execute("SELECT machine_id FROM machines WHERE group_id=?", (gid,)).fetchall()]
-        if mids:
-            ph = ",".join("?" * len(mids))
-            c.execute(f"DELETE FROM job_queue WHERE machine_id IN ({ph})", mids)
-        c.execute("DELETE FROM machines WHERE group_id=?", (gid,))
+
+        # 1. Get job IDs first
         jids = [r["job_id"] for r in c.execute("SELECT job_id FROM jobs WHERE group_id=?", (gid,)).fetchall()]
         if jids:
             ph = ",".join("?" * len(jids))
@@ -216,13 +217,25 @@ def delete_group(gid):
             c.execute(f"DELETE FROM run_logs WHERE job_id IN ({ph})", jids)
             c.execute(f"DELETE FROM email_log WHERE job_id IN ({ph})", jids)
         c.execute("DELETE FROM jobs WHERE group_id=?", (gid,))
+
+        # 2. Now safe to delete categories (no FK refs from job_queue)
+        c.execute("DELETE FROM categories WHERE group_id=?", (gid,))
+
+        # 3. Machines
+        c.execute("UPDATE job_queue SET machine_id=NULL WHERE machine_id IN (SELECT machine_id FROM machines WHERE group_id=?)", (gid,))
+        c.execute("DELETE FROM machines WHERE group_id=?", (gid,))
+
+        # 4. Files
+        c.execute("DELETE FROM group_files WHERE group_id=?", (gid,))
+
+        # 5. Group
         c.execute("DELETE FROM machine_groups WHERE group_id=?", (gid,))
 
 # ── MACHINES ────────────────────────────────────────────
-def add_machine(gid, name, system_name, ip, shared_folder, username="", password="", dept="", loc=""):
+def add_machine(gid, name, system_name, ip, shared_folder, remote_path="", username="", password="", dept="", loc=""):
     with db() as c:
-        return c.execute("""INSERT INTO machines(group_id,machine_name,system_name,ip_address,shared_folder,username,password,department,location)
-            VALUES(?,?,?,?,?,?,?,?,?)""", (gid,name,system_name,ip,shared_folder,username,password,dept,loc)).lastrowid
+        return c.execute("""INSERT INTO machines(group_id,machine_name,system_name,ip_address,shared_folder,remote_path,username,password,department,location)
+            VALUES(?,?,?,?,?,?,?,?,?,?)""", (gid,name,system_name,ip,shared_folder,remote_path,username,password,dept,loc)).lastrowid
 
 def get_machines(gid):
     with db() as c:
@@ -241,7 +254,7 @@ def toggle_machine(mid):
         c.execute("UPDATE machines SET is_active=1-is_active WHERE machine_id=?", (mid,))
 
 def update_machine(mid, **kw):
-    allowed = {"machine_name","system_name","ip_address","shared_folder","username","password","department","location"}
+    allowed = {"machine_name","system_name","ip_address","shared_folder","remote_path","username","password","department","location"}
     u = {k:v for k,v in kw.items() if k in allowed}
     # Don't overwrite password with empty string (user left field blank = keep existing)
     if "password" in u and not u["password"]:
@@ -256,10 +269,11 @@ def bulk_import_machines(gid, rows):
     with db() as c:
         for m in rows:
             try:
-                c.execute("""INSERT INTO machines(group_id,machine_name,system_name,ip_address,shared_folder,username,password,department,location)
-                    VALUES(?,?,?,?,?,?,?,?,?)""",
+                c.execute("""INSERT INTO machines(group_id,machine_name,system_name,ip_address,shared_folder,remote_path,username,password,department,location)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""",
                     (gid, m.get("name",""), m.get("system_name",""), m.get("ip",""),
-                     m.get("shared_folder",""), m.get("username",""), m.get("password",""),
+                     m.get("shared_folder",""), m.get("remote_path",""),
+                     m.get("username",""), m.get("password",""),
                      m.get("department",""), m.get("location","")))
                 added += 1
             except sqlite3.IntegrityError:
