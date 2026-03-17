@@ -361,23 +361,20 @@ textarea{resize:vertical;min-height:60px}
 <div class="ct">
 <form method="post" action="/api/settings">
 
-<div class="card"><h3>Execution Method (How to run macros on remote machines)</h3>
+<div class="card"><h3>Execution Settings</h3>
 <div class="fr">
-<div class="fg" style="max-width:200px"><label>Method</label><select name="exec_method">
-<option value="auto" {{'selected' if cfg.get('exec_method','auto')=='auto'}}>Auto (try all)</option>
-<option value="psexec" {{'selected' if cfg.get('exec_method')=='psexec'}}>PsExec only</option>
-<option value="wmic" {{'selected' if cfg.get('exec_method')=='wmic'}}>WMIC only</option>
-<option value="schtasks" {{'selected' if cfg.get('exec_method')=='schtasks'}}>Scheduled Task</option>
-<option value="local" {{'selected' if cfg.get('exec_method')=='local'}}>Local (server has Excel)</option>
+<div class="fg" style="max-width:160px"><label>Excel Visible</label><select name="excel_visible">
+<option value="1" {{'selected' if cfg.get('excel_visible','1')=='1'}}>Visible (see Excel open)</option>
+<option value="0" {{'selected' if cfg.get('excel_visible')=='0'}}>Hidden (background)</option>
 </select></div>
+<div class="fg" style="max-width:120px"><label>Timeout (sec)</label><input type="text" name="macro_timeout" value="{{cfg.get('macro_timeout','1800')}}"></div>
 <div class="fg"><label>PsExec Path</label><input type="text" name="psexec_path" value="{{cfg.get('psexec_path','psexec')}}" placeholder="psexec or D:\Tools\psexec.exe"></div>
-<div class="fg" style="max-width:120px"><label>Timeout (sec)</label><input type="text" name="macro_timeout" value="{{cfg.get('macro_timeout','600')}}"></div>
 </div>
-<div style="font-size:11px;color:var(--tx3);margin-top:4px">
-<b>Auto</b>: tries PsExec → wmic → schtasks → local fallback.
-<b>PsExec</b>: download from <a href="https://learn.microsoft.com/en-us/sysinternals/downloads/psexec" target="_blank">Microsoft Sysinternals</a> (recommended).
-<b>Local</b>: runs macro on this server (requires Excel installed here).
+<div style="font-size:11px;color:var(--tx3);margin-top:6px">
+<b>Visible</b>: Excel window opens on remote PC's screen (you can watch it work). Requires user logged in to remote desktop.<br>
+<b>Hidden</b>: runs in background. Faster but you can't see if it's working.
 </div>
+<input type="hidden" name="exec_method" value="auto">
 </div>
 
 <div class="card"><h3>Output Path</h3>

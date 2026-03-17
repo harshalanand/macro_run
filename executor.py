@@ -228,8 +228,9 @@ def _run_job(jid):
                             pass
 
                     # Write VBS to work folder (drive letter or UNC)
+                    excel_visible = D.get_setting("excel_visible", "1") == "1"
                     vbs_code = _make_vbs(excel_file, macro_name, target_cell,
-                                         safe_cat, result_name)
+                                         safe_cat, result_name, visible=excel_visible)
                     with open(vbs_work, "w", encoding="utf-8") as f:
                         f.write(vbs_code)
 
@@ -241,16 +242,17 @@ def _run_job(jid):
                         # REMOTE: schtasks with local path on remote PC
                         local_vbs = os.path.join(remote_path, today, vbs_name)
                         _run_via_schtasks(local_vbs, hostname, username, password,
-                                          task_name, jid, qid, mid, mname)
+                                          task_name, jid, qid, mid, mname,
+                                          interactive=excel_visible)
                     else:
-                        # LOCAL: cscript from mapped drive (guaranteed to work)
+                        # LOCAL: cscript from mapped drive
                         D.add_log(jid, qid, mid, "INFO", "EXEC",
-                                  f"cscript {vbs_work}")
+                                  f"cscript {vbs_work} (visible={excel_visible})")
                         subprocess.Popen(
                             ["cscript", "//NoLogo", vbs_work],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
-                            creationflags=0x08000000  # CREATE_NO_WINDOW
+                            creationflags=0 if excel_visible else 0x08000000
                         )
 
                     # Poll result
@@ -305,9 +307,13 @@ def _run_job(jid):
                     # Cleanup schtask
                     if can_schtasks and hostname:
                         try:
-                            subprocess.run(["schtasks", "/delete", "/s", hostname,
-                                            "/tn", task_name, "/f"],
-                                           capture_output=True, timeout=10)
+                            del_cmd = ["schtasks", "/delete", "/s", hostname,
+                                       "/tn", task_name, "/f"]
+                            if username:
+                                del_cmd += ["/u", username]
+                            if password:
+                                del_cmd += ["/p", password]
+                            subprocess.run(del_cmd, capture_output=True, timeout=10)
                         except:
                             pass
 
@@ -565,7 +571,7 @@ def _net_use_auth(unc_path, username, password, jid=None, mid=None):
 #  VBS - DEAD SIMPLE. No drive mapping. Just opens from scriptFolder.
 # =====================================================================
 
-def _make_vbs(excel_file, macro_name, target_cell, cat_value, result_filename):
+def _make_vbs(excel_file, macro_name, target_cell, cat_value, result_filename, visible=True):
     """
     VBS uses WScript.ScriptFullName to find its folder.
     When cscript runs from Z:\\_run_42.vbs, scriptFolder = Z:\\
@@ -596,7 +602,7 @@ If Err.Number <> 0 Then
 End If
 On Error GoTo 0
 
-xlApp.Visible = False
+xlApp.Visible = {("True" if visible else "False")}
 xlApp.DisplayAlerts = False
 xlApp.AskToUpdateLinks = False
 xlApp.EnableEvents = False
@@ -652,36 +658,51 @@ End Sub
 # =====================================================================
 
 def _run_via_schtasks(vbs_local_path, hostname, username, password,
-                      task_name, jid, qid, mid, mname):
+                      task_name, jid, qid, mid, mname, interactive=True):
     """Create + run scheduled task on remote machine using LOCAL path."""
     task_cmd = f'cscript //NoLogo "{vbs_local_path}"'
 
     create = ["schtasks", "/create", "/s", hostname,
               "/tn", task_name, "/tr", task_cmd,
               "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"]
+    # /u /p = authenticate TO the remote machine
+    if username:
+        create += ["/u", username]
+    if password:
+        create += ["/p", password]
+    # /ru /rp = which user RUNS the task on remote machine
     if username:
         create += ["/ru", username]
     if password:
         create += ["/rp", password]
+    if interactive:
+        create.append("/it")
 
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-              f"Creating task on {hostname}")
+              f"Creating task on {hostname}: {task_cmd}")
 
     try:
-        r = subprocess.run(create, capture_output=True, text=True, timeout=15)
+        r = subprocess.run(create, capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
-            err = (r.stderr.strip() or r.stdout.strip())[:150]
+            err = (r.stderr.strip() or r.stdout.strip())[:200]
             D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Create failed: {err}")
             return False
 
+        # /run also needs /u /p to authenticate to remote
         run_cmd = ["schtasks", "/run", "/s", hostname, "/tn", task_name]
+        if username:
+            run_cmd += ["/u", username]
+        if password:
+            run_cmd += ["/p", password]
+
         r2 = subprocess.run(run_cmd, capture_output=True, text=True, timeout=15)
         if r2.returncode != 0:
-            err = (r2.stderr.strip() or r2.stdout.strip())[:150]
+            err = (r2.stderr.strip() or r2.stdout.strip())[:200]
             D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Run failed: {err}")
             return False
 
-        D.add_log(jid, qid, mid, "INFO", "SCHTASKS", f"Running on {hostname}")
+        D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
+                  f"Task running on {hostname} (interactive={interactive})")
         return True
     except Exception as e:
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Error: {e}")

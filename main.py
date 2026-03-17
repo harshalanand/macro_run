@@ -276,11 +276,11 @@ async def save_settings(smtp_host:str=Form(""), smtp_port:str=Form("587"),
     smtp_username:str=Form(""), smtp_password:str=Form(""), smtp_from:str=Form(""),
     notify_emails:str=Form(""), email_enabled:str=Form("0"), compile_path:str=Form(""),
     exec_method:str=Form("auto"), psexec_path:str=Form("psexec"),
-    macro_timeout:str=Form("600")):
+    macro_timeout:str=Form("600"), excel_visible:str=Form("1")):
     for k,v in {"smtp_host":smtp_host,"smtp_port":smtp_port,"smtp_username":smtp_username,
         "smtp_from":smtp_from,"notify_emails":notify_emails,"email_enabled":email_enabled,
         "compile_path":compile_path,"exec_method":exec_method,"psexec_path":psexec_path,
-        "macro_timeout":macro_timeout}.items():
+        "macro_timeout":macro_timeout,"excel_visible":excel_visible}.items():
         D.set_setting(k, v)
     if smtp_password.strip():
         D.set_setting("smtp_password", smtp_password)
