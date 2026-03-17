@@ -202,6 +202,11 @@ async def get_machine_json(mid: int):
     if not m: raise HTTPException(404)
     return JSONResponse({k: m[k] for k in m.keys()})
 
+@app.post("/api/machines/{mid}/test")
+async def test_machine_route(mid: int):
+    results = E.test_machine(mid)
+    return JSONResponse({"results": [{"step": s, "ok": o, "msg": m} for s, o, m in results]})
+
 @app.post("/api/groups/{gid}/import-categories")
 async def import_cats(gid: int, file: UploadFile = File(...)):
     content = (await file.read()).decode("utf-8-sig")

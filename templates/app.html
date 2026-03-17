@@ -222,6 +222,7 @@ textarea{resize:vertical;min-height:60px}
 <td>{{m.username or '-'}}</td>
 <td>{% if m.is_active %}<span class="badge b-ok">On</span>{% else %}<span class="badge b-gray">Off</span>{% endif %}</td>
 <td class="fx" style="gap:3px">
+<button class="btn btn-o btn-s" onclick="testMachine({{m.machine_id}},'{{m.machine_name}}')">Test</button>
 <button class="btn btn-o btn-s" onclick="editMachine({{m.machine_id}})">Edit</button>
 <form method="post" action="/api/machines/{{m.machine_id}}/toggle" style="display:inline"><button class="btn btn-o btn-s">{{'Off' if m.is_active else 'On'}}</button></form>
 <form method="post" action="/api/machines/{{m.machine_id}}/delete" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Delete machine {{m.machine_name}}?')">Del</button></form>
@@ -437,6 +438,28 @@ async function editMachine(mid){
     $('editMachForm').action='/api/machines/'+mid+'/edit';
     $('editMachMo').classList.add('show');
   }catch(e){alert('Error loading machine: '+e.message)}
+}
+async function testMachine(mid,name){
+  const t=$('toast');
+  t.className='toast';t.style.display='block';t.style.background='var(--blue)';t.style.color='#fff';
+  t.textContent='Testing '+name+'...';
+  try{
+    const r=await fetch('/api/machines/'+mid+'/test',{method:'POST'});
+    const d=await r.json();
+    let msg=name+': ';
+    let allOk=true;
+    for(const s of d.results){
+      msg+=s.ok?'OK':'FAIL';
+      msg+='('+s.step+') ';
+      if(!s.ok)allOk=false;
+    }
+    t.className=allOk?'toast ok':'toast fail';
+    t.textContent=msg;
+    // Show detailed results
+    let detail=d.results.map(s=>(s.ok?'[OK]':'[FAIL]')+' '+s.step+': '+s.msg).join('\n');
+    setTimeout(()=>alert(detail),500);
+  }catch(e){t.className='toast fail';t.textContent='Error: '+e.message}
+  setTimeout(()=>{t.style.display='none'},8000);
 }
 </script>
 </body>
