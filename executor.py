@@ -53,58 +53,64 @@ def test_machine(mid):
     username = (m["username"] or "").strip()
     password = (m["password"] or "").strip()
 
-    # Test 1: UNC path accessible
-    if username and password and shared.startswith("\\\\"):
-        _net_use(shared, username, password)
+    # Test 1: Disconnect old connections, then map drive with creds
+    if shared.startswith("\\\\"):
+        _disconnect_server(shared)
+
+    drive = None
+    if shared.startswith("\\\\") and username and password:
+        drive = _find_free_drive()
+        if drive:
+            ok = _map_drive(drive, shared, username, password)
+            if ok:
+                results.append(("MAP_DRIVE", True, f"Mapped {drive} to {shared} (Excel will use this)"))
+            else:
+                results.append(("MAP_DRIVE", False, f"Cannot map drive to {shared}. Check username/password."))
+                drive = None
+        else:
+            results.append(("MAP_DRIVE", False, "No free drive letters (Z: through M: all in use)"))
+
+    # Test 2: Access share (via drive or UNC)
+    test_path = (drive + "\\") if drive else shared
     try:
-        os.makedirs(shared, exist_ok=True)
-        results.append(("ACCESS_SHARE", True, f"Can access {shared}"))
+        os.makedirs(test_path, exist_ok=True)
+        results.append(("ACCESS", True, f"Can access {test_path}"))
     except Exception as e:
-        results.append(("ACCESS_SHARE", False, f"Cannot access {shared}: {e}"))
+        results.append(("ACCESS", False, f"Cannot access {test_path}: {e}"))
+        if drive:
+            _unmap_drive(drive)
         return results
 
-    # Test 2: Write/read file
-    test_file = os.path.join(shared, "_test_connectivity.txt")
+    # Test 3: Write/read file
+    test_file = os.path.join(test_path, "_test_connectivity.txt")
     try:
         with open(test_file, "w") as f:
             f.write("test")
         with open(test_file, "r") as f:
             assert f.read() == "test"
         os.remove(test_file)
-        results.append(("WRITE_FILE", True, "Can write/read files on share"))
+        results.append(("WRITE_FILE", True, "Can write/read files"))
     except Exception as e:
-        results.append(("WRITE_FILE", False, f"Cannot write to share: {e}"))
+        results.append(("WRITE_FILE", False, f"Cannot write: {e}"))
 
-    # Test 3: Map drive
-    drive = _find_free_drive()
+    # Cleanup test drive
     if drive:
-        ok = _map_drive(drive, shared, username, password)
-        if ok:
-            results.append(("MAP_DRIVE", True, f"Mapped {drive} to {shared}"))
-            _unmap_drive(drive)
-        else:
-            results.append(("MAP_DRIVE", False, f"Cannot map drive to {shared}"))
-    else:
-        results.append(("MAP_DRIVE", False, "No free drive letters"))
+        _unmap_drive(drive)
 
-    # Test 4: schtasks (if hostname set)
-    if hostname:
+    # Test 4: schtasks (optional - for remote execution)
+    if hostname and username and password:
         try:
-            cmd = ["schtasks", "/query", "/s", hostname]
-            if username:
-                cmd += ["/u", username]
-            if password:
-                cmd += ["/p", password]
+            cmd = ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password, "/tn", "\\"]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if r.returncode == 0:
-                results.append(("SCHTASKS", True, f"schtasks works on {hostname} (can run macros remotely)"))
+                results.append(("SCHTASKS", True, f"Remote execution available on {hostname}"))
             else:
                 err = (r.stderr.strip() or r.stdout.strip())[:100]
-                results.append(("SCHTASKS", False, f"schtasks failed: {err}. Using local execution (still works via drive mapping)."))
+                results.append(("SCHTASKS", False, f"schtasks failed: {err}. Drive mapping will be used instead (still works)."))
         except Exception as e:
-            results.append(("SCHTASKS", False, f"schtasks error: {e}. Will use local execution."))
-    else:
-        results.append(("SCHTASKS", False, "No hostname set. Will use local cscript with drive mapping."))
+            results.append(("SCHTASKS", False, f"schtasks error: {e}. Drive mapping will be used instead."))
+    elif not hostname:
+        results.append(("SCHTASKS", False, "No System Name set. Drive mapping will be used."))
 
     return results
 
@@ -168,7 +174,11 @@ def _run_job(jid):
             username = (m["username"] or "").strip()
             password = (m["password"] or "").strip()
             remote_path = (m["remote_path"] or "").strip()
-            work_folder = drive_letter + "\\" if drive_letter else unc_folder
+            # Drive maps to SHARE root, so add today for date folder
+            if drive_letter:
+                work_folder = os.path.join(drive_letter + "\\", today)
+            else:
+                work_folder = unc_folder
 
             while not _kill_jobs.get(jid):
                 item = D.claim_next(jid, mid)
@@ -346,20 +356,46 @@ def _prep_machine(machine, today, files, jid):
     mid = machine["machine_id"]
     mname = machine["machine_name"]
 
-    # 1. Authenticate
+    # STEP 1: Disconnect ALL existing connections to this server
+    # (prevents "Access denied" when mapping drive)
+    if shared.startswith("\\\\"):
+        _disconnect_server(shared, jid, mid)
+
+    # STEP 2: Map drive letter to the SHARE (with credentials)
+    # This is the ONLY connection to the server - no conflict
+    drive_letter = None
     if shared.startswith("\\\\") and username and password:
-        _net_use(shared, username, password, jid, mid)
+        drive_letter = _find_free_drive()
+        if drive_letter:
+            ok = _map_drive(drive_letter, shared, username, password, jid, mid)
+            if ok:
+                D.add_log(jid, machine_id=mid, level="INFO", step="DRIVE",
+                          message=f"{mname}: {drive_letter} -> {shared}")
+            else:
+                drive_letter = None
 
-    # 2. Create date folder
+    # STEP 3: Create date folder (via drive letter or UNC)
+    if drive_letter:
+        work_root = drive_letter + "\\"
+        date_folder_drive = os.path.join(work_root, today)
+        os.makedirs(date_folder_drive, exist_ok=True)
+    else:
+        # Fallback: try UNC directly (might work if same domain)
+        if username and password:
+            _net_use_auth(shared, username, password, jid, mid)
+        unc_folder = os.path.join(shared, today)
+        os.makedirs(unc_folder, exist_ok=True)
+
+    # UNC path for server-side polling
     unc_folder = os.path.join(shared, today)
-    os.makedirs(unc_folder, exist_ok=True)
 
-    # 3. Copy files
+    # STEP 4: Copy files (via drive letter if available)
+    copy_target = os.path.join(drive_letter + "\\", today) if drive_letter else unc_folder
     D.add_log(jid, machine_id=mid, level="INFO", step="COPY",
-              message=f"{mname}: copying {len(files)} files")
+              message=f"{mname}: copying {len(files)} files to {copy_target}")
 
     def cp(f):
-        dst = os.path.join(unc_folder, f["original_name"])
+        dst = os.path.join(copy_target, f["original_name"])
         shutil.copy2(f["stored_path"], dst)
         sz = os.path.getsize(dst) / 1024 / 1024
         D.add_log(jid, machine_id=mid, level="INFO", step="COPY_OK",
@@ -370,36 +406,23 @@ def _prep_machine(machine, today, files, jid):
         for fut in as_completed(futs):
             fut.result()
 
-    # 4. Map drive letter (so Excel sees local path, not UNC)
-    drive_letter = None
-    if unc_folder.startswith("\\\\"):
-        drive_letter = _find_free_drive()
-        if drive_letter:
-            ok = _map_drive(drive_letter, unc_folder, username, password, jid, mid)
-            if ok:
-                D.add_log(jid, machine_id=mid, level="INFO", step="DRIVE",
-                          message=f"{mname}: {drive_letter} -> {unc_folder}")
-            else:
-                drive_letter = None
-                D.add_log(jid, machine_id=mid, level="WARN", step="DRIVE",
-                          message=f"{mname}: drive mapping failed, will try schtasks")
-
-    # 5. Check if schtasks works for this machine
+    # STEP 5: Check schtasks
     can_schtasks = False
     remote_path = (machine["remote_path"] or "").strip()
-    if hostname and remote_path:
+    if hostname and remote_path and username and password:
         try:
             r = subprocess.run(
                 ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password,
                  "/tn", "\\"],
                 capture_output=True, text=True, timeout=10)
-            can_schtasks = True
-            D.add_log(jid, machine_id=mid, level="INFO", step="SCHTASKS",
-                      message=f"{mname}: schtasks available")
+            can_schtasks = (r.returncode == 0)
+            if can_schtasks:
+                D.add_log(jid, machine_id=mid, level="INFO", step="SCHTASKS",
+                          message=f"{mname}: remote execution available")
         except:
             pass
 
-    method = "schtasks" if can_schtasks else (f"local+{drive_letter}" if drive_letter else "local+UNC")
+    method = "schtasks" if can_schtasks else (f"drive:{drive_letter}" if drive_letter else "UNC")
     D.add_log(jid, machine_id=mid, level="INFO", step="PREP_OK",
               message=f"{mname}: ready (method={method})")
 
@@ -420,9 +443,40 @@ def _find_free_drive():
     return None
 
 
+def _disconnect_server(unc_path, jid=None, mid=None):
+    """Disconnect ALL existing connections to a server (share + drive letters).
+    This prevents 'Access denied' when mapping a new drive letter."""
+    clean = unc_path.replace("/", "\\").rstrip("\\")
+    parts = [p for p in clean.split("\\") if p]
+    if not parts:
+        return
+
+    server_share = f"\\\\{parts[0]}\\{parts[1]}" if len(parts) >= 2 else f"\\\\{parts[0]}"
+
+    # Delete the share connection
+    try:
+        subprocess.run(["net", "use", server_share, "/delete", "/y"],
+                       capture_output=True, timeout=10)
+    except:
+        pass
+
+    # Also try deleting with just the server name (catches wildcard connections)
+    try:
+        subprocess.run(["net", "use", f"\\\\{parts[0]}", "/delete", "/y"],
+                       capture_output=True, timeout=10)
+    except:
+        pass
+
+    time.sleep(0.5)
+
+    if jid:
+        D.add_log(jid, machine_id=mid, level="INFO", step="DISCONNECT",
+                  message=f"Cleared connections to {server_share}")
+
+
 def _map_drive(drive, unc_path, username="", password="", jid=None, mid=None):
-    """Map drive letter to UNC path. Returns True if OK."""
-    # Disconnect first
+    """Map drive letter to UNC path with credentials. Returns True if OK."""
+    # Disconnect this drive letter if already mapped
     try:
         subprocess.run(["net", "use", drive, "/delete", "/y"],
                        capture_output=True, timeout=10)
@@ -430,6 +484,7 @@ def _map_drive(drive, unc_path, username="", password="", jid=None, mid=None):
         pass
     time.sleep(0.3)
 
+    # Map with credentials
     cmd = ["net", "use", drive, unc_path, "/persistent:no"]
     if username and password:
         cmd += [f"/user:{username}", password]
@@ -438,9 +493,10 @@ def _map_drive(drive, unc_path, username="", password="", jid=None, mid=None):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if r.returncode == 0:
             return True
+        err = (r.stderr.strip() or r.stdout.strip())[:150]
         if jid:
             D.add_log(jid, machine_id=mid, level="WARN", step="MAP",
-                      message=f"net use {drive} failed: {(r.stderr or r.stdout)[:100]}")
+                      message=f"net use {drive} {unc_path} failed: {err}")
     except Exception as e:
         if jid:
             D.add_log(jid, machine_id=mid, level="WARN", step="MAP",
@@ -457,11 +513,8 @@ def _unmap_drive(drive):
         pass
 
 
-# =====================================================================
-#  NET USE (authenticate to share)
-# =====================================================================
-
-def _net_use(unc_path, username, password, jid=None, mid=None):
+def _net_use_auth(unc_path, username, password, jid=None, mid=None):
+    """Authenticate to share WITHOUT mapping a drive. Fallback only."""
     clean = unc_path.replace("/", "\\").rstrip("\\")
     parts = [p for p in clean.split("\\") if p]
     if len(parts) >= 2:
@@ -469,27 +522,15 @@ def _net_use(unc_path, username, password, jid=None, mid=None):
     else:
         return
 
-    if jid:
-        D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
-                  message=f"net use {share} /user:{username}")
-
-    try:
-        subprocess.run(["net", "use", share, "/delete", "/y"],
-                       capture_output=True, timeout=10)
-    except:
-        pass
-    time.sleep(0.3)
-
     r = subprocess.run(
         ["net", "use", share, f"/user:{username}", password, "/persistent:no"],
         capture_output=True, text=True, timeout=15)
-    if r.returncode == 0:
-        if jid:
+    if jid:
+        if r.returncode == 0:
             D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
                       message=f"Authenticated to {share}")
-    else:
-        err = (r.stderr.strip() or r.stdout.strip())[:150]
-        if jid:
+        else:
+            err = (r.stderr.strip() or r.stdout.strip())[:150]
             D.add_log(jid, machine_id=mid, level="WARN", step="AUTH",
                       message=f"Auth failed: {err}")
 
