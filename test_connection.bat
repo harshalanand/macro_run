@@ -8,17 +8,18 @@ set /p REMOTE_PC="Enter remote PC hostname (e.g. HOPC560): "
 set /p USERNAME="Enter username (e.g. .\administrator): "
 set /p PASSWORD="Enter password: "
 
+:: Extract plain username for /ru (strip domain prefix)
+set RU_USER=%USERNAME%
+for /f "tokens=2 delims=\" %%a in ("%USERNAME%") do set RU_USER=%%a
+
 echo.
 echo Testing %REMOTE_PC%...
+echo   Auth user (/u): %USERNAME%
+echo   Run-as user (/ru): %RU_USER%
 echo.
 
 set IS_LOCAL=0
 if /i "%REMOTE_PC%"=="%COMPUTERNAME%" set IS_LOCAL=1
-
-if %IS_LOCAL%==1 (
-    echo   NOTE: %REMOTE_PC% is THIS machine.
-    echo.
-)
 
 echo [1] schtasks /query...
 if %IS_LOCAL%==1 (
@@ -35,16 +36,14 @@ if %errorlevel%==0 (
 
 echo [2] schtasks /create...
 if %IS_LOCAL%==1 (
-    schtasks /create /tn "MO_TEST" /tr "cmd /c echo test" /sc once /st 00:00 /f /rl highest /ru %USERNAME% /rp %PASSWORD% 2>&1
+    schtasks /create /tn "MO_TEST" /tr "cmd /c echo test" /sc once /st 00:00 /f /rl highest /ru %RU_USER% /rp %PASSWORD% 2>&1
 ) else (
-    schtasks /create /s %REMOTE_PC% /u %USERNAME% /p %PASSWORD% /tn "MO_TEST" /tr "cmd /c echo test" /sc once /st 00:00 /f /rl highest /ru %USERNAME% /rp %PASSWORD% 2>&1
+    schtasks /create /s %REMOTE_PC% /u %USERNAME% /p %PASSWORD% /tn "MO_TEST" /tr "cmd /c echo test" /sc once /st 00:00 /f /rl highest /ru %RU_USER% /rp %PASSWORD% 2>&1
 )
 if %errorlevel%==0 (
     echo     OK: Can create tasks
 ) else (
     echo     FAIL: See error above
-    echo.
-    echo     TIP: Try username as %REMOTE_PC%\administrator instead of .\administrator
     pause & exit /b 1
 )
 

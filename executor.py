@@ -514,10 +514,13 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
     task_cmd = f'cscript //NoLogo "{vbs_local_path}"'
     local = _is_local(hostname)
 
-    # Fix username: .\administrator -> HOPC560\administrator for remote /ru
+    # /ru needs plain username (no domain prefix)
+    # .\administrator -> administrator
+    # HOPC560\administrator -> administrator  
+    # administrator -> administrator
     ru_user = username
-    if not local and username.startswith(".\\"):
-        ru_user = hostname + username[1:]  # .\admin -> HOPC560\admin
+    if "\\" in ru_user:
+        ru_user = ru_user.split("\\", 1)[1]  # take part after backslash
 
     # BUILD CREATE COMMAND
     create = ["schtasks", "/create"]
