@@ -54,77 +54,61 @@ def test_machine(mid):
     password = (m["password"] or "").strip()
     remote_path = (m["remote_path"] or "").strip()
 
-    # Test 1: Can we access the share at all? (try direct first)
+    # Check required fields
+    missing = []
+    if not hostname: missing.append("System Name")
+    if not remote_path: missing.append("Remote Path")
+    if not username: missing.append("Username")
+    if not password: missing.append("Password")
+    if not shared: missing.append("Shared Folder")
+    if missing:
+        results.append(("CONFIG", False, f"Missing: {', '.join(missing)}"))
+        return results
+
+    # Test 1: Can we access the UNC share?
     try:
         os.makedirs(shared, exist_ok=True)
         results.append(("ACCESS", True, f"Can access {shared}"))
     except PermissionError:
-        # Try authenticating
-        if username and password and shared.startswith("\\\\"):
-            _net_use_auth(shared, username, password)
-            try:
-                os.makedirs(shared, exist_ok=True)
-                results.append(("ACCESS", True, f"Can access {shared} (after auth)"))
-            except Exception as e2:
-                results.append(("ACCESS", False, f"Cannot access {shared}: {e2}"))
-                return results
-        else:
-            results.append(("ACCESS", False, f"Permission denied on {shared} (no credentials)"))
+        _net_use_auth(shared, username, password)
+        try:
+            os.makedirs(shared, exist_ok=True)
+            results.append(("ACCESS", True, f"Can access {shared} (after auth)"))
+        except Exception as e2:
+            results.append(("ACCESS", False, f"Cannot access {shared}: {e2}"))
             return results
     except Exception as e:
         results.append(("ACCESS", False, f"Cannot access {shared}: {e}"))
         return results
 
     # Test 2: Write/read file
-    test_file = os.path.join(shared, "_test_connectivity.txt")
+    test_file = os.path.join(shared, "_test.txt")
     try:
         with open(test_file, "w") as f:
-            f.write("test")
+            f.write("ok")
         with open(test_file, "r") as f:
-            assert f.read() == "test"
+            assert f.read() == "ok"
         os.remove(test_file)
-        results.append(("WRITE", True, "Can write/read files"))
+        results.append(("WRITE", True, "Can write/read files on share"))
     except Exception as e:
         results.append(("WRITE", False, f"Cannot write: {e}"))
 
-    # Test 3: schtasks (best method)
-    if hostname and remote_path and username and password:
-        try:
-            cmd = ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password, "/fo", "list"]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            if r.returncode == 0:
-                results.append(("SCHTASKS", True,
-                    f"Remote execution on {hostname} (macro runs on remote PC's Excel)"))
-                results.append(("READY", True,
-                    f"Will use schtasks. Remote path: {remote_path}"))
-                return results
-            else:
-                err = (r.stderr.strip() or r.stdout.strip())[:100]
-                results.append(("SCHTASKS", False, f"schtasks query failed: {err}"))
-        except Exception as e:
-            results.append(("SCHTASKS", False, f"schtasks error: {e}"))
-    elif not hostname:
-        results.append(("SCHTASKS", False, "No System Name set"))
-    elif not remote_path:
-        results.append(("SCHTASKS", False, "No Remote Path set"))
-
-    # Test 4: Drive mapping (fallback when schtasks unavailable)
-    if shared.startswith("\\\\"):
-        _disconnect_server(shared)
-    drive = _find_free_drive()
-    if drive:
-        ok = _map_drive(drive, shared, username, password)
-        if ok:
-            results.append(("DRIVE", True,
-                f"Mapped {drive} to {shared} (macro runs on server's Excel)"))
-            _unmap_drive(drive)
+    # Test 3: schtasks (the ONLY execution method)
+    try:
+        cmd = ["schtasks", "/query", "/s", hostname, "/u", username,
+               "/p", password, "/fo", "list"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            results.append(("SCHTASKS", True,
+                f"schtasks works on {hostname}"))
             results.append(("READY", True,
-                f"Will use drive mapping ({drive}). Excel opens from {drive} drive."))
+                f"Macro will run on {hostname} at {remote_path}"))
         else:
-            results.append(("DRIVE", False,
-                f"Cannot map drive. Try: set Remote Path + System Name for schtasks."))
-    else:
-        results.append(("DRIVE", False, "No free drive letters"))
+            err = (r.stderr.strip() or r.stdout.strip())[:120]
+            results.append(("SCHTASKS", False,
+                f"schtasks failed: {err}. Run setup_remote.bat on {hostname} as admin."))
+    except Exception as e:
+        results.append(("SCHTASKS", False, f"schtasks error: {e}"))
 
     return results
 
@@ -162,15 +146,15 @@ def _run_job(jid):
         D.add_log(jid, level="INFO", step="START",
                   message=f"Job #{jid}: {len(queue_items)} cats x {len(machines)} machines")
 
-        # == PHASE 1: Prep machines (auth + copy + map drive) ==
-        machine_ready = {}  # mid -> (unc_folder, drive_letter, can_schtasks)
+        # == PHASE 1: Prep machines (auth + copy files) ==
+        machine_ready = {}  # mid -> unc_folder
         with ThreadPoolExecutor(max_workers=min(len(machines), 8)) as pool:
             futs = {pool.submit(_prep_machine, m, today, files, jid): m for m in machines}
             for fut in as_completed(futs):
                 m = futs[fut]
                 try:
-                    unc_folder, drive_letter, can_schtasks = fut.result()
-                    machine_ready[m["machine_id"]] = (unc_folder, drive_letter, can_schtasks)
+                    unc_folder = fut.result()
+                    machine_ready[m["machine_id"]] = unc_folder
                 except Exception as e:
                     D.add_log(jid, machine_id=m["machine_id"], level="ERROR",
                               step="PREP_FAIL", message=f"{m['machine_name']}: {e}")
@@ -180,19 +164,14 @@ def _run_job(jid):
             D.finish_job(jid)
             return
 
-        # == PHASE 2: Workers process categories ==
-        def machine_worker(mid, unc_folder, drive_letter, can_schtasks):
+        # == PHASE 2: Each machine processes categories via schtasks ==
+        def machine_worker(mid, unc_folder):
             m = D.get_machine(mid)
             mname = m["machine_name"]
             hostname = (m["system_name"] or "").strip()
             username = (m["username"] or "").strip()
             password = (m["password"] or "").strip()
             remote_path = (m["remote_path"] or "").strip()
-            # Drive maps to SHARE root, so add today for date folder
-            if drive_letter:
-                work_folder = os.path.join(drive_letter + "\\", today)
-            else:
-                work_folder = unc_folder
 
             while not _kill_jobs.get(jid):
                 item = D.claim_next(jid, mid)
@@ -203,68 +182,58 @@ def _run_job(jid):
                 cat = item["cat_value"]
                 start = datetime.now()
                 task_name = f"MQ_{jid}_{qid}"
+                vbs_unc = None
+                result_unc = None
 
                 D.add_log(jid, qid, mid, "INFO", "CAT_START",
-                          f"{mname}: '{cat}' (drive={drive_letter or 'UNC'})")
-
-                vbs_work = None
-                result_unc = None
+                          f"{mname}: '{cat}'")
 
                 try:
                     safe_cat = str(cat).replace('"', '""')
                     vbs_name = f"_run_{qid}.vbs"
                     result_name = f"_result_{qid}.txt"
 
-                    # Paths
-                    vbs_work = os.path.join(work_folder, vbs_name)
+                    vbs_unc = os.path.join(unc_folder, vbs_name)
                     result_unc = os.path.join(unc_folder, result_name)
-                    result_work = os.path.join(work_folder, result_name)
 
-                    # Clean old result
-                    for rp in [result_unc, result_work]:
-                        try:
-                            os.remove(rp)
-                        except:
-                            pass
+                    try:
+                        os.remove(result_unc)
+                    except:
+                        pass
 
-                    # Write VBS to work folder (drive letter or UNC)
+                    # Write VBS to remote share via UNC
                     excel_visible = D.get_setting("excel_visible", "1") == "1"
                     vbs_code = _make_vbs(excel_file, macro_name, target_cell,
                                          safe_cat, result_name, visible=excel_visible)
-                    with open(vbs_work, "w", encoding="utf-8") as f:
+                    with open(vbs_unc, "w", encoding="utf-8") as f:
                         f.write(vbs_code)
 
+                    # Build LOCAL path for schtasks (runs on remote PC)
+                    local_vbs = os.path.join(remote_path, today, vbs_name)
                     D.add_log(jid, qid, mid, "INFO", "VBS_READY",
-                              f"VBS at {vbs_work}")
+                              f"Remote: {local_vbs}")
 
-                    # Execute
-                    if can_schtasks and hostname and remote_path:
-                        # REMOTE: schtasks with local path on remote PC
-                        local_vbs = os.path.join(remote_path, today, vbs_name)
-                        _run_via_schtasks(local_vbs, hostname, username, password,
-                                          task_name, jid, qid, mid, mname,
-                                          interactive=excel_visible)
-                    else:
-                        # LOCAL: cscript from mapped drive
-                        D.add_log(jid, qid, mid, "INFO", "EXEC",
-                                  f"cscript {vbs_work} (visible={excel_visible})")
-                        subprocess.Popen(
-                            ["cscript", "//NoLogo", vbs_work],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            creationflags=0 if excel_visible else 0x08000000
-                        )
+                    # Execute via schtasks on target machine
+                    ok = _run_via_schtasks(local_vbs, hostname, username, password,
+                                           task_name, jid, qid, mid, mname,
+                                           interactive=excel_visible)
+                    if not ok:
+                        raise RuntimeError(f"schtasks failed on {hostname}")
 
-                    # Poll result
+                    # Poll result via UNC
                     timeout_secs = int(D.get_setting("macro_timeout", "1800"))
-                    got = _poll_result(result_work, result_unc, timeout_secs,
+                    got = _poll_result(result_unc, timeout_secs,
                                        jid, qid, mid, mname)
-
                     if not got:
-                        raise RuntimeError(f"Timeout ({timeout_secs}s) - macro did not finish")
+                        raise RuntimeError(f"Timeout ({timeout_secs}s) waiting for macro on {hostname}")
 
                     # Read result
-                    result_text = _read_result(result_work, result_unc)
+                    result_text = ""
+                    try:
+                        with open(result_unc, "r", encoding="utf-8") as rf:
+                            result_text = rf.read().strip()
+                    except:
+                        result_text = "UNKNOWN"
 
                     if result_text.startswith("ERROR"):
                         raise RuntimeError(result_text)
@@ -297,36 +266,27 @@ def _run_job(jid):
                     N.notify_macro_failure(jid, qid, mname,
                                            m["ip_address"], excel_file, macro_name, str(e), cat)
                 finally:
-                    # Cleanup VBS + result
-                    for fp in [vbs_work, result_work, result_unc]:
+                    for fp in [vbs_unc, result_unc]:
                         if fp:
                             try:
                                 os.remove(fp)
                             except:
                                 pass
-                    # Cleanup schtask
-                    if can_schtasks and hostname:
-                        try:
-                            del_cmd = ["schtasks", "/delete", "/s", hostname,
-                                       "/tn", task_name, "/f"]
-                            if username:
-                                del_cmd += ["/u", username]
-                            if password:
-                                del_cmd += ["/p", password]
-                            subprocess.run(del_cmd, capture_output=True, timeout=10)
-                        except:
-                            pass
-
-            # Worker done - unmap drive
-            if drive_letter:
-                _unmap_drive(drive_letter)
-                D.add_log(jid, machine_id=mid, level="INFO", step="UNMAP",
-                          message=f"Unmapped {drive_letter}")
+                    try:
+                        del_cmd = ["schtasks", "/delete", "/s", hostname,
+                                   "/tn", task_name, "/f"]
+                        if username:
+                            del_cmd += ["/u", username]
+                        if password:
+                            del_cmd += ["/p", password]
+                        subprocess.run(del_cmd, capture_output=True, timeout=10)
+                    except:
+                        pass
 
         # Launch workers
         with ThreadPoolExecutor(max_workers=max(len(machine_ready), 1)) as pool:
-            futs = [pool.submit(machine_worker, mid, unc, drv, sch)
-                    for mid, (unc, drv, sch) in machine_ready.items()]
+            futs = [pool.submit(machine_worker, mid, unc)
+                    for mid, unc in machine_ready.items()]
             for w in as_completed(futs):
                 try:
                     w.result()
@@ -378,82 +338,30 @@ def _prep_machine(machine, today, files, jid):
     mname = machine["machine_name"]
     unc_folder = os.path.join(shared, today)
 
-    # STEP 1: Check schtasks FIRST (best method - runs on remote PC)
-    can_schtasks = False
-    if hostname and remote_path and username and password:
-        try:
-            # Simple query - just check if we can connect to remote task scheduler
-            r = subprocess.run(
-                ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password,
-                 "/fo", "list"],
-                capture_output=True, text=True, timeout=15)
-            can_schtasks = (r.returncode == 0)
-            if can_schtasks:
-                D.add_log(jid, machine_id=mid, level="INFO", step="SCHTASKS_OK",
-                          message=f"{mname}: schtasks available on {hostname}")
-            else:
-                err = (r.stderr.strip() or r.stdout.strip())[:150]
-                D.add_log(jid, machine_id=mid, level="WARN", step="SCHTASKS_FAIL",
-                          message=f"{mname}: schtasks failed: {err}")
-        except Exception as e:
-            D.add_log(jid, machine_id=mid, level="WARN", step="SCHTASKS_FAIL",
-                      message=f"{mname}: schtasks error: {e}")
+    # STEP 1: Determine execution method
+    # If hostname + remote_path set = ALWAYS use schtasks (no drive mapping)
+    can_schtasks = bool(hostname and remote_path and username and password)
+
+    if can_schtasks:
+        D.add_log(jid, machine_id=mid, level="INFO", step="METHOD",
+                  message=f"{mname}: schtasks -> {hostname} (remote_path={remote_path})")
     else:
         missing = []
         if not hostname: missing.append("system_name")
         if not remote_path: missing.append("remote_path")
         if not username: missing.append("username")
         if not password: missing.append("password")
-        D.add_log(jid, machine_id=mid, level="WARN", step="SCHTASKS_SKIP",
-                  message=f"{mname}: schtasks skipped, missing: {', '.join(missing)}")
+        D.add_log(jid, machine_id=mid, level="ERROR", step="METHOD",
+                  message=f"{mname}: cannot run - missing: {', '.join(missing)}")
+        raise ValueError(f"{mname}: fill all fields: System Name, Remote Path, Username, Password")
 
-    # STEP 2: Authenticate and copy files
-    drive_letter = None
-
-    if can_schtasks:
-        # schtasks works! Try direct access first (may already be connected)
-        D.add_log(jid, machine_id=mid, level="INFO", step="METHOD",
-                  message=f"{mname}: using schtasks (remote execution)")
-        try:
-            os.makedirs(unc_folder, exist_ok=True)
-            D.add_log(jid, machine_id=mid, level="INFO", step="ACCESS",
-                      message=f"{mname}: share accessible directly")
-        except PermissionError:
-            # Only authenticate if direct access fails
-            if username and password:
-                _net_use_auth(shared, username, password, jid, mid)
-            os.makedirs(unc_folder, exist_ok=True)
-        copy_target = unc_folder
-
-    else:
-        # No schtasks - need drive mapping for local cscript execution
-        D.add_log(jid, machine_id=mid, level="INFO", step="METHOD",
-                  message=f"{mname}: using drive mapping (local execution)")
-
-        # Disconnect old connections first (prevents "Access denied")
-        if shared.startswith("\\\\"):
-            _disconnect_server(shared, jid, mid)
-
-        # Map drive with credentials
-        if shared.startswith("\\\\") and username and password:
-            drive_letter = _find_free_drive()
-            if drive_letter:
-                ok = _map_drive(drive_letter, shared, username, password, jid, mid)
-                if ok:
-                    D.add_log(jid, machine_id=mid, level="INFO", step="DRIVE",
-                              message=f"{mname}: {drive_letter} -> {shared}")
-                else:
-                    drive_letter = None
-                    # Fallback to UNC auth
-                    _net_use_auth(shared, username, password, jid, mid)
-
-        # Create date folder
-        if drive_letter:
-            os.makedirs(os.path.join(drive_letter + "\\", today), exist_ok=True)
-            copy_target = os.path.join(drive_letter + "\\", today)
-        else:
-            os.makedirs(unc_folder, exist_ok=True)
-            copy_target = unc_folder
+    # STEP 2: Access share and create date folder
+    try:
+        os.makedirs(unc_folder, exist_ok=True)
+    except PermissionError:
+        _net_use_auth(shared, username, password, jid, mid)
+        os.makedirs(unc_folder, exist_ok=True)
+    copy_target = unc_folder
 
     # STEP 3: Copy files
     D.add_log(jid, machine_id=mid, level="INFO", step="COPY",
@@ -471,11 +379,10 @@ def _prep_machine(machine, today, files, jid):
         for fut in as_completed(futs):
             fut.result()
 
-    method = "schtasks" if can_schtasks else (f"drive:{drive_letter}" if drive_letter else "UNC")
     D.add_log(jid, machine_id=mid, level="INFO", step="PREP_OK",
-              message=f"{mname}: ready ({method})")
+              message=f"{mname}: ready (schtasks -> {hostname})")
 
-    return unc_folder, drive_letter, can_schtasks
+    return unc_folder
 
 
 # =====================================================================
@@ -730,8 +637,8 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
 #  POLL + READ RESULT
 # =====================================================================
 
-def _poll_result(path1, path2, timeout_secs, jid, qid, mid, mname):
-    """Poll result file. Tries both paths (drive and UNC)."""
+def _poll_result(result_path, timeout_secs, jid, qid, mid, mname):
+    """Poll result file via UNC until SUCCESS/ERROR or timeout."""
     start = time.time()
     last_log = 0
 
@@ -739,15 +646,14 @@ def _poll_result(path1, path2, timeout_secs, jid, qid, mid, mname):
         if _kill_jobs.get(jid):
             return False
 
-        for p in [path1, path2]:
-            try:
-                if p and os.path.exists(p):
-                    with open(p, "r", encoding="utf-8") as f:
-                        c = f.read().strip()
-                    if c and c != "RUNNING":
-                        return True
-            except:
-                pass
+        try:
+            if os.path.exists(result_path):
+                with open(result_path, "r", encoding="utf-8") as f:
+                    c = f.read().strip()
+                if c and c != "RUNNING":
+                    return True
+        except:
+            pass
 
         elapsed = time.time() - start
         if elapsed - last_log >= 60:
@@ -757,18 +663,6 @@ def _poll_result(path1, path2, timeout_secs, jid, qid, mid, mname):
 
         time.sleep(5)
     return False
-
-
-def _read_result(path1, path2):
-    """Read result from first available path."""
-    for p in [path1, path2]:
-        try:
-            if p and os.path.exists(p):
-                with open(p, "r", encoding="utf-8") as f:
-                    return f.read().strip()
-        except:
-            pass
-    return "UNKNOWN"
 
 
 # =====================================================================
