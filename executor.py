@@ -267,12 +267,13 @@ def _run_job(jid):
                             except:
                                 pass
                     try:
-                        del_cmd = ["schtasks", "/delete", "/s", hostname,
-                                   "/tn", task_name, "/f"]
-                        if username:
-                            del_cmd += ["/u", username]
-                        if password:
-                            del_cmd += ["/p", password]
+                        del_cmd = ["schtasks", "/delete", "/tn", task_name, "/f"]
+                        if not _is_local(hostname):
+                            del_cmd[2:2] = ["/s", hostname]
+                            if username:
+                                del_cmd += ["/u", username]
+                            if password:
+                                del_cmd += ["/p", password]
                         subprocess.run(del_cmd, capture_output=True, timeout=10)
                     except:
                         pass
@@ -495,20 +496,36 @@ End Sub
 #  REMOTE EXECUTION via schtasks
 # =====================================================================
 
+def _is_local(hostname):
+    """Check if hostname is the local machine."""
+    import socket
+    local_names = {
+        socket.gethostname().upper(),
+        "LOCALHOST",
+        "127.0.0.1",
+        ".",
+    }
+    return hostname.upper() in local_names
+
+
 def _run_via_schtasks(vbs_local_path, hostname, username, password,
                       task_name, jid, qid, mid, mname, interactive=True):
-    """Create + run scheduled task on remote machine using LOCAL path."""
+    """Create + run scheduled task. Handles local and remote machines."""
     task_cmd = f'cscript //NoLogo "{vbs_local_path}"'
+    local = _is_local(hostname)
 
-    create = ["schtasks", "/create", "/s", hostname,
-              "/tn", task_name, "/tr", task_cmd,
-              "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"]
-    # /u /p = authenticate TO the remote machine
-    if username:
-        create += ["/u", username]
-    if password:
-        create += ["/p", password]
-    # /ru /rp = which user RUNS the task on remote machine
+    # BUILD CREATE COMMAND
+    create = ["schtasks", "/create"]
+    if not local:
+        create += ["/s", hostname]
+        # /u /p = authenticate TO remote machine (NOT used for local)
+        if username:
+            create += ["/u", username]
+        if password:
+            create += ["/p", password]
+    create += ["/tn", task_name, "/tr", task_cmd,
+               "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"]
+    # /ru /rp = which user RUNS the task (used for both local and remote)
     if username:
         create += ["/ru", username]
     if password:
@@ -516,8 +533,9 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
     if interactive:
         create.append("/it")
 
+    mode = "LOCAL" if local else "REMOTE"
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-              f"Creating task on {hostname}: {task_cmd}")
+              f"Creating task on {hostname} ({mode}): {task_cmd}")
 
     try:
         r = subprocess.run(create, capture_output=True, text=True, timeout=30)
@@ -526,12 +544,15 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
             D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Create failed: {err}")
             return False
 
-        # /run also needs /u /p to authenticate to remote
-        run_cmd = ["schtasks", "/run", "/s", hostname, "/tn", task_name]
-        if username:
-            run_cmd += ["/u", username]
-        if password:
-            run_cmd += ["/p", password]
+        # BUILD RUN COMMAND
+        run_cmd = ["schtasks", "/run"]
+        if not local:
+            run_cmd += ["/s", hostname]
+            if username:
+                run_cmd += ["/u", username]
+            if password:
+                run_cmd += ["/p", password]
+        run_cmd += ["/tn", task_name]
 
         r2 = subprocess.run(run_cmd, capture_output=True, text=True, timeout=15)
         if r2.returncode != 0:
@@ -540,7 +561,7 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
             return False
 
         D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                  f"Task running on {hostname} (interactive={interactive})")
+                  f"Task running on {hostname} ({mode}, interactive={interactive})")
         return True
     except Exception as e:
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Error: {e}")
