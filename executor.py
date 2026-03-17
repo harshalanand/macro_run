@@ -90,17 +90,17 @@ def test_machine(mid):
     # Test 3: schtasks (best method)
     if hostname and remote_path and username and password:
         try:
-            cmd = ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password, "/tn", "\\"]
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            cmd = ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password, "/fo", "list"]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if r.returncode == 0:
                 results.append(("SCHTASKS", True,
                     f"Remote execution on {hostname} (macro runs on remote PC's Excel)"))
                 results.append(("READY", True,
-                    f"Will use schtasks. Remote path: {remote_path}. No drive mapping needed."))
+                    f"Will use schtasks. Remote path: {remote_path}"))
                 return results
             else:
-                err = (r.stderr.strip() or r.stdout.strip())[:80]
-                results.append(("SCHTASKS", False, f"schtasks failed: {err}"))
+                err = (r.stderr.strip() or r.stdout.strip())[:100]
+                results.append(("SCHTASKS", False, f"schtasks query failed: {err}"))
         except Exception as e:
             results.append(("SCHTASKS", False, f"schtasks error: {e}"))
     elif not hostname:
@@ -382,13 +382,30 @@ def _prep_machine(machine, today, files, jid):
     can_schtasks = False
     if hostname and remote_path and username and password:
         try:
+            # Simple query - just check if we can connect to remote task scheduler
             r = subprocess.run(
                 ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password,
-                 "/tn", "\\"],
-                capture_output=True, text=True, timeout=10)
+                 "/fo", "list"],
+                capture_output=True, text=True, timeout=15)
             can_schtasks = (r.returncode == 0)
-        except:
-            pass
+            if can_schtasks:
+                D.add_log(jid, machine_id=mid, level="INFO", step="SCHTASKS_OK",
+                          message=f"{mname}: schtasks available on {hostname}")
+            else:
+                err = (r.stderr.strip() or r.stdout.strip())[:150]
+                D.add_log(jid, machine_id=mid, level="WARN", step="SCHTASKS_FAIL",
+                          message=f"{mname}: schtasks failed: {err}")
+        except Exception as e:
+            D.add_log(jid, machine_id=mid, level="WARN", step="SCHTASKS_FAIL",
+                      message=f"{mname}: schtasks error: {e}")
+    else:
+        missing = []
+        if not hostname: missing.append("system_name")
+        if not remote_path: missing.append("remote_path")
+        if not username: missing.append("username")
+        if not password: missing.append("password")
+        D.add_log(jid, machine_id=mid, level="WARN", step="SCHTASKS_SKIP",
+                  message=f"{mname}: schtasks skipped, missing: {', '.join(missing)}")
 
     # STEP 2: Authenticate and copy files
     drive_letter = None
@@ -775,13 +792,20 @@ def _collect_output(unc_folder, files, compile_dir, today, group_name,
         return []
 
     if found:
-        out = os.path.join(compile_dir, today, group_name, mname, cat)
+        # Save directly into group folder: compiled_output/{date}/{group}/
+        out = os.path.join(compile_dir, today, group_name)
         os.makedirs(out, exist_ok=True)
         for fn in found:
             try:
-                shutil.copy2(os.path.join(unc_folder, fn), os.path.join(out, fn))
-                sz = os.path.getsize(os.path.join(out, fn)) / 1024
-                D.add_log(jid, qid, mid, "INFO", "OUTPUT", f"{fn} ({sz:.1f}KB)")
+                # Prefix filename with category to avoid overwrites
+                safe_cat = cat.replace("/", "_").replace("\\", "_").replace(" ", "_")
+                out_name = f"{safe_cat}_{fn}"
+                src = os.path.join(unc_folder, fn)
+                dst = os.path.join(out, out_name)
+                shutil.copy2(src, dst)
+                sz = os.path.getsize(dst) / 1024
+                D.add_log(jid, qid, mid, "INFO", "OUTPUT",
+                          f"{out_name} ({sz:.1f}KB) -> {out}")
             except Exception as e:
                 D.add_log(jid, qid, mid, "WARN", "OUTPUT", f"{fn}: {e}")
     return found
