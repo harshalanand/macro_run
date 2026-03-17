@@ -64,18 +64,19 @@ def test_machine(mid):
         results.append(("CONFIG", False, f"Missing: {', '.join(missing)}"))
         return results
 
-    # Test 1: Can we access the UNC share?
+    # Test 1: Authenticate to UNC share
+    if shared.startswith("\\\\") and username and password:
+        ok = _net_use_auth(shared, username, password)
+        if ok:
+            results.append(("AUTH", True, f"Authenticated to share"))
+        else:
+            results.append(("AUTH", False, f"Authentication failed for {shared}. Check username/password."))
+            return results
+
+    # Test 2: Can we access the share?
     try:
         os.makedirs(shared, exist_ok=True)
         results.append(("ACCESS", True, f"Can access {shared}"))
-    except PermissionError:
-        _net_use_auth(shared, username, password)
-        try:
-            os.makedirs(shared, exist_ok=True)
-            results.append(("ACCESS", True, f"Can access {shared} (after auth)"))
-        except Exception as e2:
-            results.append(("ACCESS", False, f"Cannot access {shared}: {e2}"))
-            return results
     except Exception as e:
         results.append(("ACCESS", False, f"Cannot access {shared}: {e}"))
         return results
@@ -358,12 +359,12 @@ def _prep_machine(machine, today, files, jid):
     D.add_log(jid, machine_id=mid, level="INFO", step="METHOD",
               message=f"{mname}: schtasks -> {hostname} (remote_path={remote_path})")
 
-    # Access share and create date folder
-    try:
-        os.makedirs(unc_folder, exist_ok=True)
-    except PermissionError:
+    # Authenticate to share first (required for non-domain PCs)
+    if shared.startswith("\\\\"):
         _net_use_auth(shared, username, password, jid, mid)
-        os.makedirs(unc_folder, exist_ok=True)
+
+    # Create date folder
+    os.makedirs(unc_folder, exist_ok=True)
     copy_target = unc_folder
 
     # STEP 3: Copy files
@@ -397,21 +398,40 @@ def _net_use_auth(unc_path, username, password, jid=None, mid=None):
     clean = unc_path.replace("/", "\\").rstrip("\\")
     parts = [p for p in clean.split("\\") if p]
     if len(parts) >= 2:
-        share = f"\\\\{parts[0]}\\{parts[1]}"
+        server = parts[0]
+        share = f"\\\\{server}\\{parts[1]}"
     else:
         return
 
+    # For non-domain PCs: net use needs server\username
+    # "administrator" -> "192.168.149.61\administrator"
+    # ".\administrator" -> "192.168.149.61\administrator"
+    auth_user = username
+    if "\\" not in username:
+        auth_user = f"{server}\\{username}"
+    elif username.startswith(".\\"):
+        auth_user = f"{server}\\{username[2:]}"
+
+    # Try to disconnect first (in case stale connection)
+    try:
+        subprocess.run(["net", "use", share, "/delete", "/y"],
+                       capture_output=True, timeout=10)
+    except:
+        pass
+    time.sleep(0.3)
+
     r = subprocess.run(
-        ["net", "use", share, f"/user:{username}", password, "/persistent:no"],
+        ["net", "use", share, f"/user:{auth_user}", password, "/persistent:no"],
         capture_output=True, text=True, timeout=15)
     if jid:
         if r.returncode == 0:
             D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
-                      message=f"Authenticated to {share}")
+                      message=f"Authenticated to {share} as {auth_user}")
         else:
             err = (r.stderr.strip() or r.stdout.strip())[:150]
             D.add_log(jid, machine_id=mid, level="WARN", step="AUTH",
-                      message=f"Auth warning: {err} (may already be connected)")
+                      message=f"Auth: {err}")
+    return r.returncode == 0
 
 
 # =====================================================================
