@@ -394,44 +394,62 @@ def _prep_machine(machine, today, files, jid):
 # =====================================================================
 
 def _net_use_auth(unc_path, username, password, jid=None, mid=None):
-    """Authenticate to share for file copy via UNC."""
+    """Authenticate to share for file copy via UNC. Tries access first."""
     clean = unc_path.replace("/", "\\").rstrip("\\")
     parts = [p for p in clean.split("\\") if p]
-    if len(parts) >= 2:
-        server = parts[0]
-        share = f"\\\\{server}\\{parts[1]}"
-    else:
-        return
+    if len(parts) < 2:
+        return True
+    server = parts[0]
+    share = f"\\\\{server}\\{parts[1]}"
 
-    # For non-domain PCs: net use needs server\username
-    # "administrator" -> "192.168.149.61\administrator"
-    # ".\administrator" -> "192.168.149.61\administrator"
-    auth_user = username
-    if "\\" not in username:
-        auth_user = f"{server}\\{username}"
-    elif username.startswith(".\\"):
-        auth_user = f"{server}\\{username[2:]}"
-
-    # Try to disconnect first (in case stale connection)
+    # Step 1: Check if already accessible (don't break working connections)
     try:
-        subprocess.run(["net", "use", share, "/delete", "/y"],
-                       capture_output=True, timeout=10)
+        os.listdir(share)
+        if jid:
+            D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
+                      message=f"Share already accessible: {share}")
+        return True
     except:
         pass
-    time.sleep(0.3)
 
-    r = subprocess.run(
-        ["net", "use", share, f"/user:{auth_user}", password, "/persistent:no"],
-        capture_output=True, text=True, timeout=15)
+    # Step 2: Need to authenticate. Try multiple username formats.
+    # Extract plain username
+    plain_user = username
+    if "\\" in plain_user:
+        plain_user = plain_user.split("\\", 1)[1]
+
+    # Try in order: server\user, plain user, original input
+    attempts = [
+        f"{server}\\{plain_user}",
+        plain_user,
+        username,
+    ]
+    # Deduplicate while keeping order
+    seen = set()
+    unique = []
+    for a in attempts:
+        if a not in seen:
+            seen.add(a)
+            unique.append(a)
+
+    for auth_user in unique:
+        try:
+            r = subprocess.run(
+                ["net", "use", share, f"/user:{auth_user}", password, "/persistent:no"],
+                capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                if jid:
+                    D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
+                              message=f"Authenticated to {share} as {auth_user}")
+                return True
+        except:
+            pass
+
+    # All attempts failed
     if jid:
-        if r.returncode == 0:
-            D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
-                      message=f"Authenticated to {share} as {auth_user}")
-        else:
-            err = (r.stderr.strip() or r.stdout.strip())[:150]
-            D.add_log(jid, machine_id=mid, level="WARN", step="AUTH",
-                      message=f"Auth: {err}")
-    return r.returncode == 0
+        D.add_log(jid, machine_id=mid, level="WARN", step="AUTH",
+                  message=f"All auth attempts failed for {share}. Tried: {unique}")
+    return False
 
 
 # =====================================================================
