@@ -54,12 +54,23 @@ def test_machine(mid):
     password = (m["password"] or "").strip()
     remote_path = (m["remote_path"] or "").strip()
 
-    # Test 1: Can we access the share at all?
-    if username and password and shared.startswith("\\\\"):
-        _net_use_auth(shared, username, password)
+    # Test 1: Can we access the share at all? (try direct first)
     try:
         os.makedirs(shared, exist_ok=True)
         results.append(("ACCESS", True, f"Can access {shared}"))
+    except PermissionError:
+        # Try authenticating
+        if username and password and shared.startswith("\\\\"):
+            _net_use_auth(shared, username, password)
+            try:
+                os.makedirs(shared, exist_ok=True)
+                results.append(("ACCESS", True, f"Can access {shared} (after auth)"))
+            except Exception as e2:
+                results.append(("ACCESS", False, f"Cannot access {shared}: {e2}"))
+                return results
+        else:
+            results.append(("ACCESS", False, f"Permission denied on {shared} (no credentials)"))
+            return results
     except Exception as e:
         results.append(("ACCESS", False, f"Cannot access {shared}: {e}"))
         return results
@@ -377,12 +388,18 @@ def _prep_machine(machine, today, files, jid):
     drive_letter = None
 
     if can_schtasks:
-        # schtasks works! Just authenticate to UNC for file copy, no drive mapping needed
+        # schtasks works! Try direct access first (may already be connected)
         D.add_log(jid, machine_id=mid, level="INFO", step="METHOD",
                   message=f"{mname}: using schtasks (remote execution)")
-        if shared.startswith("\\\\") and username and password:
-            _net_use_auth(shared, username, password, jid, mid)
-        os.makedirs(unc_folder, exist_ok=True)
+        try:
+            os.makedirs(unc_folder, exist_ok=True)
+            D.add_log(jid, machine_id=mid, level="INFO", step="ACCESS",
+                      message=f"{mname}: share accessible directly")
+        except PermissionError:
+            # Only authenticate if direct access fails
+            if username and password:
+                _net_use_auth(shared, username, password, jid, mid)
+            os.makedirs(unc_folder, exist_ok=True)
         copy_target = unc_folder
 
     else:

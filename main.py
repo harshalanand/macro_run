@@ -23,6 +23,15 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="
 tpl = Jinja2Templates(directory=os.path.join(BASE, "templates"))
 D.init_db()
 
+import sys
+if "--reload" in sys.argv or any("--reload" in str(a) for a in sys.argv):
+    print("\n" + "="*60)
+    print("  WARNING: --reload WILL CRASH running jobs!")
+    print("  Every DB write triggers a server restart.")
+    print("  Use: uvicorn main:app --host 0.0.0.0 --port 8000")
+    print("  Or:  run.bat")
+    print("="*60 + "\n")
+
 # ── PAGES ───────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
