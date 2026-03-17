@@ -1,18 +1,13 @@
 """
-Executor v9 - Guaranteed execution via Python-side drive mapping.
+Executor v10 - Remote execution via schtasks ONLY.
 
-PROBLEM: Excel COM cannot open files from UNC paths.
-SOLUTION: Python maps UNC to a drive letter BEFORE launching cscript.
-          VBS sees Z: drive (local path). Always works.
+Files copy via UNC (server -> remote share).
+Macro runs via schtasks on the remote PC using its local drive path.
+No drive mapping. No local execution. No fallback.
 
-FLOW:
-  PREP: authenticate, copy files, map drive letter
-  PER CATEGORY: write VBS, run cscript from mapped drive, poll result, collect output
-  CLEANUP: unmap drive after all categories done
-
-  60 cats / 40 machines = 40 parallel, 20 queued.
+Each machine MUST have: system_name, remote_path, username, password.
 """
-import os, json, shutil, subprocess, threading, time, csv, string
+import os, json, shutil, subprocess, threading, time, csv
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -22,7 +17,6 @@ import notifier as N
 COMPILED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compiled_output")
 _running_jobs = {}
 _kill_jobs = {}
-_drive_lock = threading.Lock()  # protect drive letter allocation
 
 
 def is_running(jid):
@@ -389,88 +383,8 @@ def _prep_machine(machine, today, files, jid):
 #  DRIVE MAPPING (Python-side, not VBS)
 # =====================================================================
 
-def _find_free_drive():
-    """Find a free drive letter Z..M."""
-    with _drive_lock:
-        for letter in "ZYXWVUTSRQPONM":
-            drive = f"{letter}:"
-            if not os.path.exists(drive + "\\"):
-                return drive
-    return None
-
-
-def _disconnect_server(unc_path, jid=None, mid=None):
-    """Disconnect ALL existing connections to a server (share + drive letters).
-    This prevents 'Access denied' when mapping a new drive letter."""
-    clean = unc_path.replace("/", "\\").rstrip("\\")
-    parts = [p for p in clean.split("\\") if p]
-    if not parts:
-        return
-
-    server_share = f"\\\\{parts[0]}\\{parts[1]}" if len(parts) >= 2 else f"\\\\{parts[0]}"
-
-    # Delete the share connection
-    try:
-        subprocess.run(["net", "use", server_share, "/delete", "/y"],
-                       capture_output=True, timeout=10)
-    except:
-        pass
-
-    # Also try deleting with just the server name (catches wildcard connections)
-    try:
-        subprocess.run(["net", "use", f"\\\\{parts[0]}", "/delete", "/y"],
-                       capture_output=True, timeout=10)
-    except:
-        pass
-
-    time.sleep(0.5)
-
-    if jid:
-        D.add_log(jid, machine_id=mid, level="INFO", step="DISCONNECT",
-                  message=f"Cleared connections to {server_share}")
-
-
-def _map_drive(drive, unc_path, username="", password="", jid=None, mid=None):
-    """Map drive letter to UNC path with credentials. Returns True if OK."""
-    # Disconnect this drive letter if already mapped
-    try:
-        subprocess.run(["net", "use", drive, "/delete", "/y"],
-                       capture_output=True, timeout=10)
-    except:
-        pass
-    time.sleep(0.3)
-
-    # Map with credentials
-    cmd = ["net", "use", drive, unc_path, "/persistent:no"]
-    if username and password:
-        cmd += [f"/user:{username}", password]
-
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        if r.returncode == 0:
-            return True
-        err = (r.stderr.strip() or r.stdout.strip())[:150]
-        if jid:
-            D.add_log(jid, machine_id=mid, level="WARN", step="MAP",
-                      message=f"net use {drive} {unc_path} failed: {err}")
-    except Exception as e:
-        if jid:
-            D.add_log(jid, machine_id=mid, level="WARN", step="MAP",
-                      message=f"Map error: {e}")
-    return False
-
-
-def _unmap_drive(drive):
-    """Unmap a drive letter."""
-    try:
-        subprocess.run(["net", "use", drive, "/delete", "/y"],
-                       capture_output=True, timeout=10)
-    except:
-        pass
-
-
 def _net_use_auth(unc_path, username, password, jid=None, mid=None):
-    """Authenticate to share WITHOUT mapping a drive. Fallback only."""
+    """Authenticate to share for file copy via UNC."""
     clean = unc_path.replace("/", "\\").rstrip("\\")
     parts = [p for p in clean.split("\\") if p]
     if len(parts) >= 2:
@@ -488,18 +402,18 @@ def _net_use_auth(unc_path, username, password, jid=None, mid=None):
         else:
             err = (r.stderr.strip() or r.stdout.strip())[:150]
             D.add_log(jid, machine_id=mid, level="WARN", step="AUTH",
-                      message=f"Auth failed: {err}")
+                      message=f"Auth warning: {err} (may already be connected)")
 
 
 # =====================================================================
-#  VBS - DEAD SIMPLE. No drive mapping. Just opens from scriptFolder.
+#  VBS - Runs on remote PC. Opens Excel from local drive path.
 # =====================================================================
 
 def _make_vbs(excel_file, macro_name, target_cell, cat_value, result_filename, visible=True):
     """
-    VBS uses WScript.ScriptFullName to find its folder.
-    When cscript runs from Z:\\_run_42.vbs, scriptFolder = Z:\\
-    Excel opens Z:\\file.xlsb = drive letter = WORKS.
+    VBS runs ON the remote PC via schtasks.
+    It uses WScript.ScriptFullName to find its folder (local drive path).
+    Excel opens from local path = always works.
     """
     return f'''Dim fso, scriptFolder, excelPath, resultPath
 Dim xlApp, xlWb
