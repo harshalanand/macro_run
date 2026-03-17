@@ -514,20 +514,24 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
     task_cmd = f'cscript //NoLogo "{vbs_local_path}"'
     local = _is_local(hostname)
 
+    # Fix username: .\administrator -> HOPC560\administrator for remote /ru
+    ru_user = username
+    if not local and username.startswith(".\\"):
+        ru_user = hostname + username[1:]  # .\admin -> HOPC560\admin
+
     # BUILD CREATE COMMAND
     create = ["schtasks", "/create"]
     if not local:
         create += ["/s", hostname]
-        # /u /p = authenticate TO remote machine (NOT used for local)
         if username:
             create += ["/u", username]
         if password:
             create += ["/p", password]
     create += ["/tn", task_name, "/tr", task_cmd,
                "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"]
-    # /ru /rp = which user RUNS the task (used for both local and remote)
-    if username:
-        create += ["/ru", username]
+    # /ru /rp = which user RUNS the task on TARGET machine
+    if ru_user:
+        create += ["/ru", ru_user]
     if password:
         create += ["/rp", password]
     if interactive:
@@ -535,7 +539,7 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
 
     mode = "LOCAL" if local else "REMOTE"
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-              f"Creating task on {hostname} ({mode}): {task_cmd}")
+              f"Creating task on {hostname} ({mode}, ru={ru_user})")
 
     try:
         r = subprocess.run(create, capture_output=True, text=True, timeout=30)
@@ -561,7 +565,7 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
             return False
 
         D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                  f"Task running on {hostname} ({mode}, interactive={interactive})")
+                  f"Task running on {hostname} ({mode})")
         return True
     except Exception as e:
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Error: {e}")
