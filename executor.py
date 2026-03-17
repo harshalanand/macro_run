@@ -48,6 +48,11 @@ def test_machine(mid):
     password = (m["password"] or "").strip()
     remote_path = (m["remote_path"] or "").strip()
 
+    # Block local machine
+    if hostname and _is_local(hostname):
+        results.append(("BLOCKED", False, f"{hostname} is THIS server. Macros only run on REMOTE PCs."))
+        return results
+
     # Check required fields
     missing = []
     if not hostname: missing.append("System Name")
@@ -333,24 +338,27 @@ def _prep_machine(machine, today, files, jid):
     mname = machine["machine_name"]
     unc_folder = os.path.join(shared, today)
 
-    # STEP 1: Determine execution method
-    # If hostname + remote_path set = ALWAYS use schtasks (no drive mapping)
-    can_schtasks = bool(hostname and remote_path and username and password)
+    # BLOCK: Server cannot run macros on itself
+    if _is_local(hostname):
+        D.add_log(jid, machine_id=mid, level="ERROR", step="BLOCKED",
+                  message=f"{mname}: {hostname} is THIS server. Macros only run on REMOTE PCs. Remove this machine or change System Name.")
+        raise ValueError(f"{mname}: cannot run macros on server itself ({hostname})")
 
-    if can_schtasks:
-        D.add_log(jid, machine_id=mid, level="INFO", step="METHOD",
-                  message=f"{mname}: schtasks -> {hostname} (remote_path={remote_path})")
-    else:
-        missing = []
-        if not hostname: missing.append("system_name")
-        if not remote_path: missing.append("remote_path")
-        if not username: missing.append("username")
-        if not password: missing.append("password")
-        D.add_log(jid, machine_id=mid, level="ERROR", step="METHOD",
-                  message=f"{mname}: cannot run - missing: {', '.join(missing)}")
-        raise ValueError(f"{mname}: fill all fields: System Name, Remote Path, Username, Password")
+    # Validate all fields
+    missing = []
+    if not hostname: missing.append("System Name")
+    if not remote_path: missing.append("Remote Path")
+    if not username: missing.append("Username")
+    if not password: missing.append("Password")
+    if missing:
+        D.add_log(jid, machine_id=mid, level="ERROR", step="CONFIG",
+                  message=f"{mname}: missing {', '.join(missing)}")
+        raise ValueError(f"{mname}: fill all fields: {', '.join(missing)}")
 
-    # STEP 2: Access share and create date folder
+    D.add_log(jid, machine_id=mid, level="INFO", step="METHOD",
+              message=f"{mname}: schtasks -> {hostname} (remote_path={remote_path})")
+
+    # Access share and create date folder
     try:
         os.makedirs(unc_folder, exist_ok=True)
     except PermissionError:
@@ -497,15 +505,27 @@ End Sub
 # =====================================================================
 
 def _is_local(hostname):
-    """Check if hostname is the local machine."""
+    """Check if hostname is the local machine (by name or IP)."""
     import socket
+    h = hostname.upper().strip()
     local_names = {
         socket.gethostname().upper(),
         "LOCALHOST",
         "127.0.0.1",
         ".",
     }
-    return hostname.upper() in local_names
+    if h in local_names:
+        return True
+    # Also check if it's one of our own IPs
+    try:
+        local_ips = set()
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            local_ips.add(info[4][0])
+        if h in local_ips:
+            return True
+    except:
+        pass
+    return False
 
 
 def _run_via_schtasks(vbs_local_path, hostname, username, password,
