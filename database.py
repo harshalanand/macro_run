@@ -366,14 +366,56 @@ def get_queue(jid):
             WHERE q.job_id=? ORDER BY q.queue_id""", (jid,)).fetchall()
 
 def claim_next(jid, mid):
-    """Atomically claim next QUEUED category for a machine."""
-    with db() as c:
-        row = c.execute("SELECT queue_id FROM job_queue WHERE job_id=? AND status='QUEUED' ORDER BY queue_id LIMIT 1", (jid,)).fetchone()
-        if not row:
-            return None
-        c.execute("UPDATE job_queue SET status='RUNNING',machine_id=?,started_at=? WHERE queue_id=?",
-            (mid, datetime.now().isoformat(), row["queue_id"]))
-        return c.execute("SELECT * FROM job_queue WHERE queue_id=?", (row["queue_id"],)).fetchone()
+    """Atomically claim the next QUEUED category for a machine.
+
+    Uses BEGIN IMMEDIATE to get an exclusive write lock BEFORE selecting,
+    so concurrent machine threads cannot select the same row simultaneously.
+    Without this, 3 machines all SELECT the same first QUEUED row, then
+    all UPDATE it — resulting in the same category running on all machines.
+    """
+    import time, random
+    for _attempt in range(10):          # retry up to 10x on db busy
+        try:
+            conn = get_conn()
+            try:
+                conn.execute("BEGIN IMMEDIATE")   # exclusive write lock
+                row = conn.execute(
+                    "SELECT queue_id FROM job_queue "
+                    "WHERE job_id=? AND status='QUEUED' "
+                    "ORDER BY queue_id LIMIT 1",
+                    (jid,)
+                ).fetchone()
+                if not row:
+                    conn.commit()
+                    return None
+                conn.execute(
+                    "UPDATE job_queue SET status='RUNNING', machine_id=?, started_at=? "
+                    "WHERE queue_id=? AND status='QUEUED'",
+                    (mid, datetime.now().isoformat(), row["queue_id"])
+                )
+                if conn.total_changes == 0:
+                    # Another thread claimed it between our SELECT and UPDATE — retry
+                    conn.rollback()
+                    time.sleep(random.uniform(0.05, 0.15))
+                    continue
+                result = conn.execute(
+                    "SELECT * FROM job_queue WHERE queue_id=?",
+                    (row["queue_id"],)
+                ).fetchone()
+                conn.commit()
+                return result
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+        except Exception as e:
+            err = str(e).lower()
+            if "locked" in err or "busy" in err:
+                time.sleep(random.uniform(0.1, 0.3))
+                continue
+            raise
+    return None   # exhausted retries
 
 def finish_queue_item(qid, status, **kw):
     allowed = {"finished_at","date_folder","output_files","error_message","duration_secs"}
