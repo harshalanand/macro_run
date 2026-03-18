@@ -618,87 +618,108 @@ def _get_active_session_user(hostname, admin_username, admin_password, jid=None,
 def _run_via_schtasks(vbs_local_path, hostname, username, password,
                       task_name, jid, qid, mid, mname, interactive=True):
     """Create + run scheduled task. Handles local and remote machines.
-    
-    Detects the currently logged-in user on the remote machine and runs
-    the task as THAT user (so it works even if logged in as vishnu.kumar,
-    not administrator). Falls back to configured username or SYSTEM.
+
+    Key logic for user resolution:
+      1. Query the remote machine for the ACTIVE logged-in session user.
+      2. If a different user is detected (e.g. vishnu.kumar vs configured
+         administrator), run the task AS that detected user:
+           - /ru <detected_user>  (no /rp — Windows allows this for /it
+             tasks when the user already has an active interactive session)
+      3. If detection fails or no session exists, fall back to the
+         configured username + password.
+      4. If /it create fails for any reason, retry without /it (headless).
+      5. If headless also fails, last resort: run as SYSTEM (no /ru /rp).
     """
     task_cmd = f'cscript //NoLogo "{vbs_local_path}"'
     local = _is_local(hostname)
 
-    # /ru needs plain username (no domain prefix)
+    # Strip domain prefix from configured username for /ru
     # .\administrator -> administrator
-    # HOPC560\administrator -> administrator  
-    # administrator -> administrator
-    ru_user = username
-    if "\\" in ru_user:
-        ru_user = ru_user.split("\\", 1)[1]  # take part after backslash
+    # DOMAIN\administrator -> administrator
+    configured_ru = username
+    if "\\" in configured_ru:
+        configured_ru = configured_ru.split("\\", 1)[1]
 
-    # Detect who is ACTUALLY logged into the remote machine.
-    # This allows the task to run even if logged in as a non-admin user (e.g. vishnu.kumar).
+    # --- Detect who is ACTUALLY logged into the remote machine ---
+    ru_user = configured_ru      # default: use configured user
+    ru_password = password       # default: use configured password
+    user_was_detected = False
+
     if not local:
-        detected_user = _get_active_session_user(hostname, username, password, jid, qid, mid)
-        if detected_user:
-            # Use the detected logged-in user as /ru so the task runs in their session
-            ru_user = detected_user
-            # For /it (interactive) we need the task to run AS the logged-in user.
-            # If the detected user differs from configured user, we try with the
-            # configured password (often the same in corporate environments).
-            # If it fails, we'll retry without /it below.
+        detected = _get_active_session_user(hostname, username, password, jid, qid, mid)
+        if detected:
+            # Normalise: strip any domain prefix from detected user too
+            plain_detected = detected.split("\\")[-1].strip()
+            if plain_detected.lower() != configured_ru.lower():
+                # Logged-in user differs from configured admin — run AS detected user.
+                # Do NOT pass /rp: Windows schtasks /it does not require the password
+                # when the user already has an active interactive session.
+                D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
+                          f"{hostname}: configured user='{configured_ru}' but logged-in user='{plain_detected}' "
+                          f"— will run task as '{plain_detected}' (no password needed for active session)")
+                ru_user = plain_detected
+                ru_password = None          # intentionally omit /rp for detected user
+                user_was_detected = True
+            else:
+                D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
+                          f"{hostname}: logged-in user matches configured user '{configured_ru}'")
         else:
             D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                      f"No active session detected on {hostname} — will run as configured user")
+                      f"No active session detected on {hostname} — running as configured user '{configured_ru}'")
 
-    # BUILD CREATE COMMAND
-    create = ["schtasks", "/create"]
-    if not local:
-        create += ["/s", hostname]
-        if username:
-            create += ["/u", username]
-        if password:
-            create += ["/p", password]
-    create += ["/tn", task_name, "/tr", task_cmd,
-               "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"]
-    # /ru /rp = which user RUNS the task on TARGET machine
-    if ru_user:
-        create += ["/ru", ru_user]
-    if password:
-        create += ["/rp", password]
-    if interactive:
-        create.append("/it")
+    def _build_create(run_as_user, run_as_password, with_interactive):
+        """Build the schtasks /create command list."""
+        cmd = ["schtasks", "/create"]
+        if not local:
+            cmd += ["/s", hostname, "/u", username, "/p", password]
+        cmd += ["/tn", task_name, "/tr", task_cmd,
+                "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"]
+        if run_as_user:
+            cmd += ["/ru", run_as_user]
+        if run_as_password:
+            cmd += ["/rp", run_as_password]
+        if with_interactive:
+            cmd.append("/it")
+        return cmd
 
     mode = "LOCAL" if local else "REMOTE"
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-              f"Creating task on {hostname} ({mode}, ru={ru_user})")
+              f"Creating task on {hostname} ({mode}) — ru='{ru_user}' "
+              f"{'(detected session user, no /rp)' if user_was_detected else '(configured user)'}")
+
+    # Attempt order:
+    #  1. Primary:  ru_user + ru_password + /it
+    #  2. Fallback: ru_user + ru_password (no /it, headless)
+    #  3. Last resort: SYSTEM (no /ru /rp, no /it) — macro runs hidden
+    attempts = [
+        (ru_user,  ru_password,  interactive,  "primary"),
+        (ru_user,  ru_password,  False,         "headless (no /it)"),
+        (None,     None,         False,         "SYSTEM fallback"),
+    ]
+
+    task_created = False
+    for a_user, a_pass, a_it, a_label in attempts:
+        create = _build_create(a_user, a_pass, a_it)
+        r = subprocess.run(create, capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
+                      f"Task created [{a_label}] on {hostname}")
+            task_created = True
+            break
+        err = (r.stderr.strip() or r.stdout.strip())[:200]
+        D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
+                  f"Create [{a_label}] failed: {err}")
+
+    if not task_created:
+        D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
+                  f"All create attempts failed on {hostname} — cannot run task")
+        return False
 
     try:
-        r = subprocess.run(create, capture_output=True, text=True, timeout=30)
-        if r.returncode != 0:
-            err = (r.stderr.strip() or r.stdout.strip())[:200]
-            # If /it failed (no interactive session for that user), retry without /it
-            if interactive and "/it" in create:
-                D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                          f"Interactive create failed ({err}), retrying without /it (headless mode)...")
-                create_nh = [c for c in create if c != "/it"]
-                r = subprocess.run(create_nh, capture_output=True, text=True, timeout=30)
-                if r.returncode != 0:
-                    err2 = (r.stderr.strip() or r.stdout.strip())[:200]
-                    D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Headless create also failed: {err2}")
-                    return False
-                D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                          f"Task created in headless mode on {hostname}")
-            else:
-                D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Create failed: {err}")
-                return False
-
-        # BUILD RUN COMMAND
+        # BUILD RUN COMMAND — always uses admin credentials to TRIGGER the task
         run_cmd = ["schtasks", "/run"]
         if not local:
-            run_cmd += ["/s", hostname]
-            if username:
-                run_cmd += ["/u", username]
-            if password:
-                run_cmd += ["/p", password]
+            run_cmd += ["/s", hostname, "/u", username, "/p", password]
         run_cmd += ["/tn", task_name]
 
         r2 = subprocess.run(run_cmd, capture_output=True, text=True, timeout=15)
@@ -708,10 +729,10 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
             return False
 
         D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                  f"Task running on {hostname} ({mode}, user={ru_user})")
+                  f"Task running on {hostname} ({mode}) as '{ru_user}'")
         return True
     except Exception as e:
-        D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Error: {e}")
+        D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Error triggering task: {e}")
         return False
 
 
