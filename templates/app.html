@@ -362,9 +362,6 @@ textarea{resize:vertical;min-height:60px}
 <h3 style="margin:0">Machines ({{machines|length}})</h3>
 <div class="fx" style="gap:6px">
 <button class="btn btn-p btn-s" onclick="$('addFromMasterMo').classList.add('show')">+ From Master</button>
-<a href="/api/templates/machines.csv" class="btn btn-o btn-s">Template</a>
-<button class="btn btn-o btn-s" onclick="$('importMo').classList.add('show')">Import CSV</button>
-<button class="btn btn-o btn-s" onclick="$('machMo').classList.add('show')">+ Manual</button>
 </div></div>
 {% if machines %}<table><tr><th>Name</th><th>System</th><th>Shared Folder</th><th>Remote Path</th><th>User</th><th>Status</th><th>Actions</th></tr>
 {% for m in machines %}<tr style="{% if not m.is_active %}opacity:.45{% endif %}">
