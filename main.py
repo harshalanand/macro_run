@@ -290,7 +290,14 @@ async def add_machine(gid: int, machine_name:str=Form(...), system_name:str=Form
     D.add_machine(gid, machine_name, system_name, ip_address, shared_folder, remote_path, username, password, department, location)
     return RedirectResponse(f"/groups/{gid}", 303)
 
-@app.post("/api/machines/{mid}/delete")
+@app.post("/api/groups/{gid}/untag-machines")
+async def bulk_untag_machines(gid: int, machine_ids: str = Form(...)):
+    if E.is_running.__module__ and D.group_has_active_job(gid):
+        raise HTTPException(400, "Cannot untag machines while a job is running. Kill the job first.")
+    ids = [int(x.strip()) for x in machine_ids.split(",") if x.strip().isdigit()]
+    D.bulk_untag_machines(ids)
+    return RedirectResponse(f"/groups/{gid}", 303)
+
 async def del_machine(mid: int):
     m = D.get_machine(mid)
     D.delete_machine(mid)

@@ -401,27 +401,84 @@ textarea{resize:vertical;min-height:60px}
 {% for c in cats %}<div class="cat-item">{{c.cat_value}}<form method="post" action="/api/categories/{{c.cat_id}}/delete"><button title="Remove" onclick="return confirm('Remove?')">x</button></form></div>{% endfor %}
 </div>{% else %}<div class="empty">No categories. Add manually or import CSV.</div>{% endif %}</div>
 
-<div class="card"><div class="fx mb" style="justify-content:space-between">
+<div class="card" style="padding:0;overflow:hidden">
+<div class="fx mb" style="justify-content:space-between;padding:14px 18px 0">
 <h3 style="margin:0">Machines ({{machines|length}})</h3>
 <div class="fx" style="gap:6px">
 <button class="btn btn-p btn-s" onclick="$('addFromMasterMo').classList.add('show')">+ From Master</button>
 </div></div>
-{% if machines %}<table><tr><th>Name</th><th>System</th><th>Shared Folder</th><th>Remote Path</th><th>User</th><th>Status</th><th>Actions</th></tr>
-{% for m in machines %}<tr style="{% if not m.is_active %}opacity:.45{% endif %}">
-<td style="font-weight:600">{{m.machine_name}}</td>
-<td class="mono" style="font-size:11.5px">{{m.system_name or '-'}}</td>
-<td class="mono trunc" title="{{m.shared_folder}}">{{m.shared_folder}}</td>
-<td class="mono trunc" title="{{m.remote_path}}">{% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}</td>
-<td class="mono" style="font-size:11px">{{m.username or '-'}}</td>
+
+{% if machines %}
+{# Bulk untag panel - shown when checkboxes selected #}
+<div id="grpBulkPanel" style="display:none;padding:10px 18px;background:var(--bg3);border-bottom:1px solid var(--bdr)">
+<form method="post" action="/api/groups/{{g.group_id}}/untag-machines" id="grpBulkForm"
+      onsubmit="return prepareGroupBulk(event)">
+<input type="hidden" name="machine_ids" id="grpBulkIds">
+<div class="fx" style="gap:10px">
+<span id="grpSelCount" style="font-size:12px;color:var(--tx2)">0 selected</span>
+<button class="btn btn-s" style="color:var(--warn);border:1px solid var(--warn);background:transparent"
+  onclick="if(!confirm('Untag selected machines from this group?'))event.preventDefault()">
+  Untag Selected
+</button>
+<button type="button" class="btn btn-o btn-s" onclick="clearGroupSelection()">Cancel</button>
+</div>
+</form>
+</div>
+
+<div style="overflow-x:auto">
+<table id="grpMachTable" style="table-layout:fixed;width:100%;min-width:820px">
+<colgroup>
+  <col style="width:36px">
+  <col style="width:110px">
+  <col style="width:110px">
+  <col style="width:190px">
+  <col style="width:130px">
+  <col style="width:140px">
+  <col style="width:70px">
+  <col style="width:200px">
+</colgroup>
+<thead>
+<tr>
+<th style="text-align:center"><input type="checkbox" id="grpChkAll" onclick="toggleGroupChecks(this)" title="Select all"></th>
+<th>Name</th>
+<th>System</th>
+<th>Shared Folder (UNC)</th>
+<th>Remote Path</th>
+<th>Username</th>
+<th>Status</th>
+<th>Actions</th>
+</tr>
+</thead>
+<tbody>
+{% for m in machines %}
+<tr id="grow_{{m.machine_id}}" style="{% if not m.is_active %}opacity:.45{% endif %}">
+<td style="text-align:center"><input type="checkbox" class="gmchk" value="{{m.machine_id}}" onchange="updateGroupBulkPanel()"></td>
+<td style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.machine_name}}">{{m.machine_name}}</td>
+<td class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.system_name or ''}}">{{m.system_name or '—'}}</td>
+<td class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.shared_folder}}">{{m.shared_folder}}</td>
+<td class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.remote_path or ''}}">
+  {% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}
+</td>
+<td class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.username or ''}}">{{m.username or '—'}}</td>
 <td>{% if m.is_active %}<span class="badge b-ok">On</span>{% else %}<span class="badge b-gray">Off</span>{% endif %}</td>
 <td><div class="act-cell">
-<button class="btn btn-o btn-s" onclick="testMachine({{m.machine_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
-<button class="btn btn-o btn-s" onclick="editMachine({{m.machine_id}})">Edit</button>
-<form method="post" action="/api/machines/{{m.machine_id}}/toggle" style="display:inline"><button class="btn btn-o btn-s">{{'Off' if m.is_active else 'On'}}</button></form>
-<form method="post" action="/api/machines/{{m.machine_id}}/delete" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Delete?')">Del</button></form>
+  <button class="btn btn-o btn-s" onclick="testMachine({{m.machine_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
+  <button class="btn btn-o btn-s" onclick="editMachine({{m.machine_id}})">Edit</button>
+  <form method="post" action="/api/machines/{{m.machine_id}}/toggle" style="display:inline">
+    <button class="btn btn-o btn-s">{{'Off' if m.is_active else 'On'}}</button>
+  </form>
+  <form method="post" action="/api/machines/{{m.machine_id}}/delete" style="display:inline"
+    onsubmit="return confirm('Untag {{m.machine_name}} from this group?')">
+    <button class="btn btn-s" style="color:var(--warn);border:1px solid var(--warn);background:transparent">Untag</button>
+  </form>
 </div></td>
-</tr>{% endfor %}</table>
-{% else %}<div class="empty">No machines. Add from Master, import CSV, or add manually.</div>{% endif %}</div>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% else %}<div class="empty" style="padding:24px">No machines. Add from Machine Master using "+ From Master".</div>{% endif %}
+</div>
 
 {% if jobs %}<div class="card"><h3>Recent Jobs</h3>
 <table><tr><th>Job</th><th>Date</th><th>Status</th><th>Cats</th><th>OK</th><th>Fail</th><th></th></tr>
@@ -801,6 +858,31 @@ async function untagMachine(mid, name, groupName){
       toast((d.error||'Untag failed'),'fail');
     }
   }catch(e){toast('Error: '+e.message,'fail')}
+}
+
+function toggleGroupChecks(master){
+  document.querySelectorAll('.gmchk').forEach(c=>c.checked=master.checked);
+  updateGroupBulkPanel();
+}
+function updateGroupBulkPanel(){
+  const checked=document.querySelectorAll('.gmchk:checked');
+  const panel=$('grpBulkPanel');
+  const cnt=$('grpSelCount');
+  if(panel) panel.style.display=checked.length>0?'block':'none';
+  if(cnt) cnt.textContent=checked.length+' selected';
+  const all=$('grpChkAll');
+  if(all) all.checked=checked.length===document.querySelectorAll('.gmchk').length&&checked.length>0;
+}
+function clearGroupSelection(){
+  document.querySelectorAll('.gmchk').forEach(c=>c.checked=false);
+  const all=$('grpChkAll');if(all)all.checked=false;
+  updateGroupBulkPanel();
+}
+function prepareGroupBulk(e){
+  const ids=[...document.querySelectorAll('.gmchk:checked')].map(c=>c.value).join(',');
+  if(!ids){e.preventDefault();toast('Select at least one machine','fail');return false}
+  $('grpBulkIds').value=ids;
+  return true;
 }
 
 async function testEmail(){

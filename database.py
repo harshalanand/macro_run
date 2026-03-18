@@ -403,9 +403,28 @@ def group_has_active_job(gid):
         return (r["c"] or 0) > 0
 
 def untag_master_from_group(master_id):
-    """Remove group assignment from a master machine (makes it available again)."""
+    """Remove group assignment from master AND delete the machine from the group's machines table."""
     with db() as c:
+        m = c.execute("SELECT machine_name, assigned_group_id FROM machine_master WHERE master_id=?",
+                      (master_id,)).fetchone()
+        if m and m["assigned_group_id"]:
+            # Remove from the group machines table
+            c.execute("DELETE FROM machines WHERE machine_name=? AND group_id=?",
+                      (m["machine_name"], m["assigned_group_id"]))
+        # Clear assignment in master
         c.execute("UPDATE machine_master SET assigned_group_id=NULL WHERE master_id=?", (master_id,))
+
+def bulk_untag_machines(machine_ids):
+    """Untag multiple machines from their groups (by machines.machine_id list)."""
+    with db() as c:
+        for mid in machine_ids:
+            row = c.execute("SELECT machine_name, group_id FROM machines WHERE machine_id=?", (mid,)).fetchone()
+            if not row:
+                continue
+            c.execute("DELETE FROM machines WHERE machine_id=?", (mid,))
+            c.execute("""UPDATE machine_master SET assigned_group_id=NULL
+                         WHERE machine_name=? AND assigned_group_id=?""",
+                      (row["machine_name"], row["group_id"]))
 
 def toggle_machine(mid):
     with db() as c:
