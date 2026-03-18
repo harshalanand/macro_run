@@ -39,15 +39,61 @@ async def dashboard(r: Request):
     return tpl.TemplateResponse("app.html", {"request": r, "page": "dash", "s": D.get_dashboard()})
 
 @app.get("/machines", response_class=HTMLResponse)
-async def machines_page(r: Request, tag: str = ""):
+async def machines_page(r: Request, tag: str = "", imported: str = "", errors: str = ""):
     machines = D.get_master_machines(tag or None)
     tags = D.get_master_tags()
     groups = D.get_groups()
+    import_msg = ""
+    if imported:
+        import_msg = f"✅ Imported {imported} machines" + (f" ({errors} errors)" if errors and errors != "0" else "")
     return tpl.TemplateResponse("app.html", {
         "request": r, "page": "machines",
         "machines": machines, "tags": tags,
-        "groups": groups, "active_tag": tag
+        "groups": groups, "active_tag": tag,
+        "import_msg": import_msg
     })
+
+@app.post("/api/master-machines/import")
+async def import_master_machines(file: UploadFile = File(...)):
+    import io, csv as _csv
+    content = (await file.read()).decode("utf-8-sig")
+    reader = _csv.DictReader(io.StringIO(content))
+    added = 0
+    errors = []
+    for i, row in enumerate(reader, 1):
+        name = (row.get("machine_name") or row.get("name") or "").strip()
+        if not name:
+            errors.append(f"Row {i}: missing machine_name")
+            continue
+        try:
+            D.create_master_machine(
+                name=name,
+                system_name=(row.get("system_name") or row.get("hostname") or "").strip(),
+                ip=(row.get("ip_address") or row.get("ip") or "").strip(),
+                shared_folder=(row.get("shared_folder") or row.get("folder") or "").strip(),
+                remote_path=(row.get("remote_path") or row.get("local_path") or "").strip(),
+                username=(row.get("username") or row.get("user") or "").strip(),
+                password=(row.get("password") or "").strip(),
+                department=(row.get("department") or row.get("dept") or "").strip(),
+                location=(row.get("location") or "").strip(),
+                tags=(row.get("tags") or "").strip(),
+            )
+            added += 1
+        except Exception as e:
+            errors.append(f"Row {i} ({name}): {e}")
+    return RedirectResponse(f"/machines?imported={added}&errors={len(errors)}", 303)
+
+@app.get("/api/templates/master-machines.csv")
+async def tpl_master_machines():
+    import io, csv as _csv
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["machine_name","system_name","ip_address","shared_folder","remote_path","username","password","department","location","tags"])
+    w.writerow(["PC-SALES-01","PCSAL01","192.168.1.101",r"\\PCSAL01\Share\Macro",r"D:\Share\Macro","administrator","pass123","Sales","Floor 2","sales,floor2"])
+    w.writerow(["PC-FIN-01","PCFIN01","192.168.1.110",r"\\PCFIN01\Reports\Macro",r"E:\Reports\Macro","administrator","pass123","Finance","Floor 3","finance,floor3"])
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=master_machines_template.csv"})
 
 @app.post("/api/master-machines")
 async def create_master_machine(
@@ -129,6 +175,10 @@ async def add_from_master(gid: int, master_ids: str = Form(...)):
     return RedirectResponse(f"/groups/{gid}", 303)
 
 
+async def groups_page(r: Request):
+    return tpl.TemplateResponse("app.html", {"request": r, "page": "groups", "groups": D.get_groups()})
+
+@app.get("/groups", response_class=HTMLResponse)
 async def groups_page(r: Request):
     return tpl.TemplateResponse("app.html", {"request": r, "page": "groups", "groups": D.get_groups()})
 
