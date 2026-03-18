@@ -146,6 +146,21 @@ def _run_job(jid):
         D.add_log(jid, level="INFO", step="START",
                   message=f"Job #{jid}: {len(queue_items)} cats x {len(machines)} machines")
 
+        # == VALIDATE compile_dir is writable before starting ==
+        try:
+            os.makedirs(compile_dir, exist_ok=True)
+            test_f = os.path.join(compile_dir, f"._write_test_{jid}")
+            with open(test_f, "w") as tf:
+                tf.write("ok")
+            os.remove(test_f)
+            D.add_log(jid, level="INFO", step="COMPILE_PATH",
+                      message=f"Output folder OK: {compile_dir}")
+        except Exception as e:
+            D.add_log(jid, level="ERROR", step="COMPILE_PATH",
+                      message=f"Cannot write to compile_path '{compile_dir}': {e}. "
+                              f"Fix path in Settings or check folder permissions — all output will be LOST.")
+            # Don't abort — still run macros, just warn loudly
+
         # == PHASE 1: Prep machines (auth + copy files) ==
         machine_ready = {}  # mid -> unc_folder
         with ThreadPoolExecutor(max_workers=min(len(machines), 8)) as pool:
@@ -213,6 +228,9 @@ def _run_job(jid):
                     D.add_log(jid, qid, mid, "INFO", "VBS_READY",
                               f"Remote: {local_vbs}")
 
+                    # Snapshot folder BEFORE macro runs — so we only copy NEW output
+                    pre_snapshot = _snapshot_folder(unc_folder)
+
                     # Execute via schtasks on target machine
                     ok = _run_via_schtasks(local_vbs, hostname, username, password,
                                            task_name, jid, qid, mid, mname,
@@ -241,10 +259,10 @@ def _run_job(jid):
                     D.add_log(jid, qid, mid, "INFO", "MACRO_DONE",
                               f"{mname}: '{cat}' -> {result_text[:80]}")
 
-                    # Collect output
+                    # Collect output — only pending/new files since snapshot
                     new_files = _collect_output(unc_folder, files, compile_dir,
                                                 today, group_name, mname, cat,
-                                                jid, qid, mid)
+                                                jid, qid, mid, pre_snapshot)
 
                     elapsed = (datetime.now() - start).total_seconds()
                     D.finish_queue_item(qid, "SUCCESS",
@@ -566,9 +584,45 @@ def _is_local(hostname):
     return False
 
 
+def _get_active_session_user(hostname, admin_username, admin_password, jid=None, qid=None, mid=None):
+    """
+    Query the currently logged-in interactive user on a remote machine.
+    Uses 'query user /server:hostname' (requires prior net use auth).
+    Returns the plain username string, or None if not determinable.
+    """
+    try:
+        cmd = ["query", "user", f"/server:{hostname}"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines()[1:]:   # skip header row
+                line = line.strip()
+                if not line:
+                    continue
+                # Mark active session (line starts with ">")
+                # Format: >username  sessionname  id  Active  idletime  logontime
+                parts = line.lstrip(">").split()
+                if len(parts) >= 4 and parts[3].lower() == "active":
+                    logged_user = parts[0].strip()
+                    if jid:
+                        D.add_log(jid, qid, mid, "INFO", "SESSION",
+                                  f"Detected logged-in user on {hostname}: {logged_user}")
+                    return logged_user
+    except Exception as e:
+        if jid:
+            D.add_log(jid, qid, mid, "INFO", "SESSION",
+                      f"Could not query session on {hostname}: {e}")
+    return None
+
+
+
 def _run_via_schtasks(vbs_local_path, hostname, username, password,
                       task_name, jid, qid, mid, mname, interactive=True):
-    """Create + run scheduled task. Handles local and remote machines."""
+    """Create + run scheduled task. Handles local and remote machines.
+    
+    Detects the currently logged-in user on the remote machine and runs
+    the task as THAT user (so it works even if logged in as vishnu.kumar,
+    not administrator). Falls back to configured username or SYSTEM.
+    """
     task_cmd = f'cscript //NoLogo "{vbs_local_path}"'
     local = _is_local(hostname)
 
@@ -579,6 +633,21 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
     ru_user = username
     if "\\" in ru_user:
         ru_user = ru_user.split("\\", 1)[1]  # take part after backslash
+
+    # Detect who is ACTUALLY logged into the remote machine.
+    # This allows the task to run even if logged in as a non-admin user (e.g. vishnu.kumar).
+    if not local:
+        detected_user = _get_active_session_user(hostname, username, password, jid, qid, mid)
+        if detected_user:
+            # Use the detected logged-in user as /ru so the task runs in their session
+            ru_user = detected_user
+            # For /it (interactive) we need the task to run AS the logged-in user.
+            # If the detected user differs from configured user, we try with the
+            # configured password (often the same in corporate environments).
+            # If it fails, we'll retry without /it below.
+        else:
+            D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
+                      f"No active session detected on {hostname} — will run as configured user")
 
     # BUILD CREATE COMMAND
     create = ["schtasks", "/create"]
@@ -606,8 +675,21 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
         r = subprocess.run(create, capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             err = (r.stderr.strip() or r.stdout.strip())[:200]
-            D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Create failed: {err}")
-            return False
+            # If /it failed (no interactive session for that user), retry without /it
+            if interactive and "/it" in create:
+                D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
+                          f"Interactive create failed ({err}), retrying without /it (headless mode)...")
+                create_nh = [c for c in create if c != "/it"]
+                r = subprocess.run(create_nh, capture_output=True, text=True, timeout=30)
+                if r.returncode != 0:
+                    err2 = (r.stderr.strip() or r.stdout.strip())[:200]
+                    D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Headless create also failed: {err2}")
+                    return False
+                D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
+                          f"Task created in headless mode on {hostname}")
+            else:
+                D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Create failed: {err}")
+                return False
 
         # BUILD RUN COMMAND
         run_cmd = ["schtasks", "/run"]
@@ -626,11 +708,12 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
             return False
 
         D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                  f"Task running on {hostname} ({mode})")
+                  f"Task running on {hostname} ({mode}, user={ru_user})")
         return True
     except Exception as e:
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Error: {e}")
         return False
+
 
 
 # =====================================================================
@@ -669,40 +752,83 @@ def _poll_result(result_path, timeout_secs, jid, qid, mid, mname):
 #  COLLECT OUTPUT
 # =====================================================================
 
+def _snapshot_folder(folder):
+    """Return dict of {filename: mtime} for all files currently in folder."""
+    snap = {}
+    try:
+        for fn in os.listdir(folder):
+            fp = os.path.join(folder, fn)
+            if os.path.isfile(fp):
+                snap[fn] = os.path.getmtime(fp)
+    except:
+        pass
+    return snap
+
+
 def _collect_output(unc_folder, files, compile_dir, today, group_name,
-                    mname, cat, jid, qid, mid):
+                    mname, cat, jid, qid, mid, pre_snapshot=None):
+    """
+    Collect only PENDING/NEW output files:
+      - Files that did NOT exist before the macro ran (not in pre_snapshot), OR
+      - Files that existed but were MODIFIED after the macro ran (mtime changed),
+        including original files that the macro may have saved back.
+    Skips temp VBS/result/lock files.
+    """
+    if pre_snapshot is None:
+        pre_snapshot = {}
+
     original = {f["original_name"] for f in files}
-    skip = ("_run_", "_result_", "_macro_", "~$")
+    skip_prefixes = ("_run_", "_result_", "_macro_", "~$")
     found = []
 
     try:
         for fn in os.listdir(unc_folder):
-            if fn in original or any(fn.startswith(s) for s in skip):
+            fp = os.path.join(unc_folder, fn)
+            if not os.path.isfile(fp):
                 continue
-            if os.path.isfile(os.path.join(unc_folder, fn)):
+            if any(fn.startswith(s) for s in skip_prefixes):
+                continue
+
+            cur_mtime = os.path.getmtime(fp)
+            prev_mtime = pre_snapshot.get(fn)
+
+            if prev_mtime is None:
+                # Brand-new file produced by macro → always collect
                 found.append(fn)
+            elif cur_mtime > prev_mtime + 1:
+                # File existed but was MODIFIED (incl. originals saved by macro)
+                found.append(fn)
+            # else: unchanged file — skip (already collected in a prior cat run)
+
     except Exception as e:
-        D.add_log(jid, qid, mid, "WARN", "COLLECT", f"Cannot list: {e}")
+        D.add_log(jid, qid, mid, "WARN", "COLLECT", f"Cannot list folder: {e}")
         return []
 
-    if found:
-        # Save directly into group folder: compiled_output/{date}/{group}/
-        out = os.path.join(compile_dir, today, group_name)
-        os.makedirs(out, exist_ok=True)
-        for fn in found:
-            try:
-                # Prefix filename with category to avoid overwrites
-                safe_cat = cat.replace("/", "_").replace("\\", "_").replace(" ", "_")
-                out_name = f"{safe_cat}_{fn}"
-                src = os.path.join(unc_folder, fn)
-                dst = os.path.join(out, out_name)
-                shutil.copy2(src, dst)
-                sz = os.path.getsize(dst) / 1024
-                D.add_log(jid, qid, mid, "INFO", "OUTPUT",
-                          f"{out_name} ({sz:.1f}KB) -> {out}")
-            except Exception as e:
-                D.add_log(jid, qid, mid, "WARN", "OUTPUT", f"{fn}: {e}")
-    return found
+    if not found:
+        D.add_log(jid, qid, mid, "INFO", "COLLECT",
+                  f"{mname}: no new/modified output files for '{cat}' (all already copied or none produced)")
+        return []
+
+    out = os.path.join(compile_dir, today, group_name)
+    os.makedirs(out, exist_ok=True)
+
+    copied = []
+    for fn in found:
+        try:
+            safe_cat = cat.replace("/", "_").replace("\\", "_").replace(" ", "_")
+            # Avoid double-prefix if fn already starts with safe_cat
+            out_name = fn if fn.startswith(safe_cat + "_") else f"{safe_cat}_{fn}"
+            src = os.path.join(unc_folder, fn)
+            dst = os.path.join(out, out_name)
+            shutil.copy2(src, dst)
+            sz = os.path.getsize(dst) / 1024
+            D.add_log(jid, qid, mid, "INFO", "OUTPUT",
+                      f"Copied: {out_name} ({sz:.1f}KB) -> {out}")
+            copied.append(out_name)
+        except Exception as e:
+            D.add_log(jid, qid, mid, "WARN", "OUTPUT", f"Failed to copy {fn}: {e}")
+
+    return copied
 
 
 # =====================================================================
