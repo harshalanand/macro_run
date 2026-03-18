@@ -168,25 +168,39 @@ textarea{resize:vertical;min-height:60px}
 <tr>
 <th style="width:30px"><input type="checkbox" id="chkAll" onclick="toggleAllChecks(this)" title="Select all"></th>
 <th>Machine</th><th>System / IP</th><th>Shared Folder (UNC)</th><th>Remote Path</th>
-<th>Username</th><th>Dept</th><th>Tags</th><th>Health</th><th>Last Check</th><th>Actions</th>
+<th>Username</th><th>Group</th><th>Tags</th><th>Health</th><th>Issue / Last Check</th><th>Actions</th>
 </tr>
 {% for m in machines %}<tr id="mrow_{{m.master_id}}" data-name="{{m.machine_name|lower}}" data-sys="{{(m.system_name or '')|lower}}" data-ip="{{(m.ip_address or '')|lower}}" data-dept="{{(m.department or '')|lower}}" data-health="{{m.health_status or 'UNKNOWN'}}" style="{% if not m.is_active %}opacity:.4{% endif %}">
-<td><input type="checkbox" class="mchk" value="{{m.master_id}}"></td>
-<td style="font-weight:600;min-width:110px">{{m.machine_name}}</td>
-<td class="mono" style="min-width:110px">{{m.system_name or '-'}}<br><span style="color:var(--tx3);font-size:10.5px">{{m.ip_address or ''}}</span></td>
-<td class="mono trunc" style="min-width:140px" title="{{m.shared_folder or ''}}">{{m.shared_folder or '-'}}</td>
-<td class="mono trunc" style="min-width:110px" title="{{m.remote_path or ''}}">{% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}</td>
-<td class="mono" style="font-size:11px">{{m.username or '-'}}</td>
-<td style="font-size:12px;min-width:70px">{{m.department or ''}}</td>
-<td style="min-width:80px">{% if m.tags %}{% for t in m.tags.split(',') %}{% if t.strip() %}<span class="chip" style="font-size:10px;padding:2px 6px;margin:1px 2px">{{t.strip()}}</span>{% endif %}{% endfor %}{% endif %}</td>
-<td id="health_{{m.master_id}}" style="min-width:90px">
-{% if m.health_status=='OK' %}<span class="badge b-ok">OK</span>
-{% elif m.health_status=='PARTIAL' %}<span class="badge b-warn">Partial</span>
-{% elif m.health_status=='FAIL' %}<span class="badge b-err">Fail</span>
-{% else %}<span class="badge b-gray">Unknown</span>{% endif %}
+<td><input type="checkbox" class="mchk" value="{{m.master_id}}" {% if m.assigned_group_id %}disabled title="Already in a group"{% endif %}></td>
+<td style="font-weight:600;min-width:110px">
+  {{m.machine_name}}
+  {% if m.department %}<br><span style="font-size:10px;color:var(--tx3)">{{m.department}}</span>{% endif %}
 </td>
-<td class="mono" style="font-size:10px;color:var(--tx3);white-space:nowrap;min-width:110px">{{m.health_checked_at[:16] if m.health_checked_at else '-'}}</td>
-<td style="min-width:240px"><div class="act-cell">
+<td class="mono" style="min-width:110px">{{m.system_name or '—'}}<br><span style="color:var(--tx3);font-size:10.5px">{{m.ip_address or ''}}</span></td>
+<td class="mono trunc" style="min-width:140px" title="{{m.shared_folder or ''}}">{{m.shared_folder or '—'}}</td>
+<td class="mono trunc" style="min-width:110px" title="{{m.remote_path or ''}}">{% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}</td>
+<td class="mono" style="font-size:11px">{{m.username or '—'}}</td>
+<td style="font-size:11px;min-width:90px">
+  {% if m.assigned_group_name %}<span class="badge b-purple" style="font-size:10px">{{m.assigned_group_name}}</span>
+  {% else %}<span style="color:var(--tx3)">—</span>{% endif %}
+</td>
+<td style="min-width:80px">{% if m.tags %}{% for t in m.tags.split(',') %}{% if t.strip() %}<span class="chip" style="font-size:10px;padding:2px 6px;margin:1px 2px">{{t.strip()}}</span>{% endif %}{% endfor %}{% endif %}</td>
+<td id="health_{{m.master_id}}" style="min-width:80px">
+{% if m.health_status=='OK' %}<span class="badge b-ok">&#10003; OK</span>
+{% elif m.health_status=='PARTIAL' %}<span class="badge b-warn">&#9888; Partial</span>
+{% elif m.health_status=='FAIL' %}<span class="badge b-err">&#10007; Fail</span>
+{% else %}<span class="badge b-gray">— Unknown</span>{% endif %}
+</td>
+<td id="issue_{{m.master_id}}" style="min-width:160px;font-size:10.5px">
+  {% if m.health_status in ('FAIL','PARTIAL') and m.health_detail %}
+    <span style="color:var(--err)" title="{{m.health_detail}}">
+      {{m.health_detail.split('FAIL ')[1].split('|')[0][:60] if 'FAIL ' in m.health_detail else m.health_detail[:60]}}
+    </span>
+  {% elif m.health_checked_at %}
+    <span style="color:var(--tx3)">{{m.health_checked_at[:16]}}</span>
+  {% else %}<span style="color:var(--tx3)">Not checked</span>{% endif %}
+</td>
+<td style="min-width:230px"><div class="act-cell">
 <button class="btn btn-o btn-s" onclick="checkHealth({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
 <button class="btn btn-o btn-s" onclick="viewDetail({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Detail</button>
 <button class="btn btn-o btn-s" onclick="loadEditMaster({{m.master_id}})">Edit</button>
@@ -636,14 +650,25 @@ async function testMachine(mid,name){
 const _healthDetails={};
 async function checkHealth(mid,name){
   const badge=$('health_'+mid);if(badge) badge.innerHTML='<span class="badge b-blue pulse">Testing...</span>';
+  const issue=$('issue_'+mid);if(issue) issue.innerHTML='<span style="color:var(--tx3)">Running tests...</span>';
   toast('Checking '+name+'...','info');
   try{
     const r=await fetch('/api/master-machines/'+mid+'/health',{method:'POST'});const d=await r.json();
     _healthDetails[mid]=d.results;
-    const html=d.status==='OK'?'<span class="badge b-ok">OK</span>':d.status==='PARTIAL'?'<span class="badge b-warn">Partial</span>':'<span class="badge b-err">Fail</span>';
+    const html=d.status==='OK'?'<span class="badge b-ok">&#10003; OK</span>':d.status==='PARTIAL'?'<span class="badge b-warn">&#9888; Partial</span>':'<span class="badge b-err">&#10007; Fail</span>';
     if(badge) badge.innerHTML=html;
-    toast(name+' -> '+d.status,d.status==='OK'?'ok':d.status==='PARTIAL'?'info':'fail');
+    // Update issue cell
+    if(issue){
+      const fails=d.results.filter(r=>!r.ok);
+      if(fails.length){
+        issue.innerHTML='<span style="color:var(--err)" title="'+fails.map(f=>f.step+': '+f.msg).join(' | ')+'">'+fails[0].step+': '+fails[0].msg.substring(0,55)+'</span>';
+      }else{
+        const now=new Date().toISOString().slice(0,16);
+        issue.innerHTML='<span style="color:var(--tx3)">'+now+'</span>';
+      }
+    }
     const row=document.getElementById('mrow_'+mid);if(row) row.dataset.health=d.status;
+    toast(name+' \u2192 '+d.status,d.status==='OK'?'ok':d.status==='PARTIAL'?'info':'fail');
   }catch(e){toast('Error: '+e.message,'fail')}
 }
 
@@ -655,13 +680,15 @@ async function checkAllHealth(){
     let ok=0,fail=0;
     for(const [mid,res] of Object.entries(d)){
       const badge=$('health_'+mid);
-      if(badge) badge.innerHTML=res.status==='OK'?'<span class="badge b-ok">OK</span>':res.status==='PARTIAL'?'<span class="badge b-warn">Partial</span>':'<span class="badge b-err">Fail</span>';
+      if(badge) badge.innerHTML=res.status==='OK'?'<span class="badge b-ok">&#10003; OK</span>':res.status==='PARTIAL'?'<span class="badge b-warn">&#9888; Partial</span>':'<span class="badge b-err">&#10007; Fail</span>';
       const row=document.getElementById('mrow_'+mid);if(row) row.dataset.health=res.status;
       if(res.status==='OK')ok++;else fail++;
     }
     toast('Done: '+ok+' OK, '+fail+' issues',fail>0?'fail':'ok');
+    // Reload after short delay so issue column refreshes from DB
+    setTimeout(()=>location.reload(),2500);
   }catch(e){toast('Error: '+e.message,'fail')}
-  finally{if(btn){btn.textContent='⚡ Check All';btn.disabled=false}}
+  finally{if(btn){btn.textContent='&#9889; Check All';btn.disabled=false}}
 }
 
 function viewDetail(mid,name){

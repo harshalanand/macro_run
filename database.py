@@ -150,22 +150,23 @@ def init_db():
 
         -- Master machine registry (global, not per-group)
         CREATE TABLE IF NOT EXISTS machine_master (
-            master_id     INTEGER PRIMARY KEY AUTOINCREMENT,
-            machine_name  TEXT NOT NULL UNIQUE,
-            system_name   TEXT DEFAULT '',
-            ip_address    TEXT DEFAULT '',
-            shared_folder TEXT DEFAULT '',
-            remote_path   TEXT DEFAULT '',
-            username      TEXT DEFAULT '',
-            password      TEXT DEFAULT '',
-            department    TEXT DEFAULT '',
-            location      TEXT DEFAULT '',
-            tags          TEXT DEFAULT '',
-            health_status TEXT DEFAULT 'UNKNOWN',
+            master_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_name    TEXT NOT NULL UNIQUE,
+            system_name     TEXT DEFAULT '',
+            ip_address      TEXT DEFAULT '',
+            shared_folder   TEXT DEFAULT '',
+            remote_path     TEXT DEFAULT '',
+            username        TEXT DEFAULT '',
+            password        TEXT DEFAULT '',
+            department      TEXT DEFAULT '',
+            location        TEXT DEFAULT '',
+            tags            TEXT DEFAULT '',
+            assigned_group_id INTEGER DEFAULT NULL,
+            health_status   TEXT DEFAULT 'UNKNOWN',
             health_checked_at TIMESTAMP,
-            health_detail TEXT DEFAULT '',
-            is_active     INTEGER DEFAULT 1,
-            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            health_detail   TEXT DEFAULT '',
+            is_active       INTEGER DEFAULT 1,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
         # Migrations
@@ -174,9 +175,10 @@ def init_db():
         except:
             c.execute("ALTER TABLE machines ADD COLUMN remote_path TEXT DEFAULT ''")
         try:
-            c.execute("SELECT tags FROM machine_master LIMIT 1")
+            c.execute("SELECT assigned_group_id FROM machine_master LIMIT 1")
         except:
-            pass  # table just created above
+            c.execute("ALTER TABLE machine_master ADD COLUMN assigned_group_id INTEGER DEFAULT NULL")
+
 
 
 # ── SETTINGS ────────────────────────────────────────────
@@ -196,15 +198,42 @@ def get_all_settings():
 # ── MACHINE MASTER ───────────────────────────────────────
 def get_master_machines(tag=None):
     with db() as c:
+        base = """SELECT mm.*, g.group_name as assigned_group_name
+                  FROM machine_master mm
+                  LEFT JOIN machine_groups g ON mm.assigned_group_id=g.group_id"""
         if tag:
-            return c.execute(
-                "SELECT * FROM machine_master WHERE tags LIKE ? ORDER BY machine_name",
-                (f"%{tag}%",)).fetchall()
-        return c.execute("SELECT * FROM machine_master ORDER BY machine_name").fetchall()
+            return c.execute(base + " WHERE mm.tags LIKE ? ORDER BY mm.machine_name",
+                             (f"%{tag}%",)).fetchall()
+        return c.execute(base + " ORDER BY mm.machine_name").fetchall()
+
+def get_master_machines_unassigned():
+    """Return master machines not yet assigned to any group."""
+    with db() as c:
+        return c.execute("""SELECT mm.*, g.group_name as assigned_group_name
+                            FROM machine_master mm
+                            LEFT JOIN machine_groups g ON mm.assigned_group_id=g.group_id
+                            WHERE mm.assigned_group_id IS NULL
+                            ORDER BY mm.machine_name""").fetchall()
 
 def get_master_machine(mid):
     with db() as c:
-        return c.execute("SELECT * FROM machine_master WHERE master_id=?", (mid,)).fetchone()
+        return c.execute("""SELECT mm.*, g.group_name as assigned_group_name
+                            FROM machine_master mm
+                            LEFT JOIN machine_groups g ON mm.assigned_group_id=g.group_id
+                            WHERE mm.master_id=?""", (mid,)).fetchone()
+
+def ip_exists_in_master(ip, exclude_mid=None):
+    """Check if IP already registered in master (for uniqueness validation)."""
+    if not ip or not ip.strip():
+        return False
+    with db() as c:
+        if exclude_mid:
+            r = c.execute("SELECT master_id FROM machine_master WHERE ip_address=? AND master_id!=? AND ip_address!=''",
+                          (ip.strip(), exclude_mid)).fetchone()
+        else:
+            r = c.execute("SELECT master_id FROM machine_master WHERE ip_address=? AND ip_address!=''",
+                          (ip.strip(),)).fetchone()
+        return r is not None
 
 def create_master_machine(name, system_name, ip, shared_folder, remote_path,
                           username, password, department, location, tags):
@@ -213,12 +242,13 @@ def create_master_machine(name, system_name, ip, shared_folder, remote_path,
             (machine_name,system_name,ip_address,shared_folder,remote_path,
              username,password,department,location,tags)
             VALUES(?,?,?,?,?,?,?,?,?,?)""",
-            (name,system_name,ip,shared_folder,remote_path,
-             username,password,department,location,tags)).lastrowid
+            (name, system_name, ip, shared_folder, remote_path,
+             username, password, department, location, tags)).lastrowid
 
 def update_master_machine(mid, **kw):
     allowed = {"machine_name","system_name","ip_address","shared_folder","remote_path",
-               "username","password","department","location","tags","is_active"}
+               "username","password","department","location","tags","is_active",
+               "assigned_group_id"}
     u = {k:v for k,v in kw.items() if k in allowed and v is not None}
     if not u: return
     with db() as c:
@@ -235,6 +265,13 @@ def update_master_health(mid, status, detail=""):
                      WHERE master_id=?""",
                   (status, datetime.now().isoformat(), detail[:1000], mid))
 
+def sync_health_to_master(machine_name, status, detail=""):
+    """Sync health status from a group machine test back to master record."""
+    with db() as c:
+        c.execute("""UPDATE machine_master SET health_status=?,health_checked_at=?,health_detail=?
+                     WHERE machine_name=?""",
+                  (status, datetime.now().isoformat(), detail[:1000], machine_name))
+
 def get_master_tags():
     """Return sorted unique tag list across all master machines."""
     with db() as c:
@@ -248,24 +285,30 @@ def get_master_tags():
     return sorted(tags)
 
 def add_master_to_group(gid, master_id):
-    """Copy a master machine record into a group's machines table."""
+    """Copy a master machine record into a group's machines table and mark it assigned."""
     m = get_master_machine(master_id)
     if not m:
         return None
     with db() as c:
-        # Check if already in group (by system_name or machine_name)
         exists = c.execute(
             "SELECT machine_id FROM machines WHERE group_id=? AND machine_name=?",
             (gid, m["machine_name"])).fetchone()
         if exists:
+            # Still mark assigned in master
+            c.execute("UPDATE machine_master SET assigned_group_id=? WHERE master_id=?",
+                      (gid, master_id))
             return exists["machine_id"]
-        return c.execute("""INSERT INTO machines
+        mid = c.execute("""INSERT INTO machines
             (group_id,machine_name,system_name,ip_address,shared_folder,remote_path,
              username,password,department,location)
             VALUES(?,?,?,?,?,?,?,?,?,?)""",
             (gid, m["machine_name"], m["system_name"], m["ip_address"],
              m["shared_folder"], m["remote_path"], m["username"], m["password"],
              m["department"], m["location"])).lastrowid
+        # Tag master record as assigned to this group
+        c.execute("UPDATE machine_master SET assigned_group_id=? WHERE master_id=?",
+                  (gid, master_id))
+        return mid
 
 # ── GROUPS ──────────────────────────────────────────────
 def create_group(name, desc=""):

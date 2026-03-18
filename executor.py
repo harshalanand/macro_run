@@ -37,15 +37,37 @@ def run_async(jid):
 
 
 def test_machine(mid):
-    """Test connectivity to a machine. Returns list of (step, ok, message)."""
+    """Test connectivity to a group machine. Returns list of (step, ok, message)."""
     m = D.get_machine(mid)
     if not m:
         return [("LOAD", False, "Machine not found")]
-    return test_machine_dict(dict(m))
+    results = test_machine_dict(dict(m))
+    # Sync health result back to master record (if this machine exists in master by name)
+    ok_count = sum(1 for r in results if r[1])
+    fail_count = sum(1 for r in results if not r[1])
+    if ok_count and not fail_count:
+        status = "OK"
+    elif ok_count and fail_count:
+        status = "PARTIAL"
+    else:
+        status = "FAIL"
+    detail = " | ".join(f"{'OK' if r[1] else 'FAIL'} {r[0]}: {r[2]}" for r in results)
+    D.sync_health_to_master(m["machine_name"], status, detail)
+    return results
 
 
 def test_machine_dict(m):
-    """Test a machine dict (works for both group machines and master machines)."""
+    """Test a machine dict (works for both group machines and master machines).
+
+    Step classification:
+      CONFIG  — missing required fields (always fatal, stops here)
+      BLOCKED — machine is the server itself (always fatal)
+      AUTH    — net use authentication (fatal if fails)
+      ACCESS  — can list the share directory
+      WRITE   — can write/read/delete a test file (non-fatal warning)
+      SCHTASKS— remote schtasks query (key test — required for execution)
+      READY   — all critical tests passed
+    """
     results = []
     shared = (m.get("shared_folder") or "").strip()
     hostname = (m.get("system_name") or "").strip()
@@ -55,65 +77,67 @@ def test_machine_dict(m):
 
     # Block local machine
     if hostname and _is_local(hostname):
-        results.append(("BLOCKED", False, f"{hostname} is THIS server. Macros only run on REMOTE PCs."))
+        results.append(("BLOCKED", False, f"{hostname} is THIS server — macros only run on REMOTE PCs"))
         return results
 
     # Check required fields
     missing = []
-    if not hostname: missing.append("System Name")
+    if not hostname:    missing.append("System Name")
     if not remote_path: missing.append("Remote Path")
-    if not username: missing.append("Username")
-    if not password: missing.append("Password")
-    if not shared: missing.append("Shared Folder")
+    if not username:    missing.append("Username")
+    if not password:    missing.append("Password")
+    if not shared:      missing.append("Shared Folder")
     if missing:
-        results.append(("CONFIG", False, f"Missing: {', '.join(missing)}"))
+        results.append(("CONFIG", False, f"Missing required fields: {', '.join(missing)}"))
         return results
 
-    # Test 1: Authenticate to UNC share
-    if shared.startswith("\\\\") and username and password:
-        ok = _net_use_auth(shared, username, password)
-        if ok:
-            results.append(("AUTH", True, "Authenticated to share"))
+    # AUTH: Authenticate to UNC share
+    if shared.startswith("\\\\"):
+        auth_ok = _net_use_auth(shared, username, password)
+        if auth_ok:
+            results.append(("AUTH", True, f"Authenticated to {shared}"))
         else:
-            results.append(("AUTH", False, f"Authentication failed for {shared}. Check username/password."))
+            results.append(("AUTH", False, f"Authentication failed for {shared} — check username/password"))
             return results
+    else:
+        results.append(("AUTH", True, f"Local/non-UNC path, skipping auth"))
 
-    # Test 2: Can we access the share?
+    # ACCESS: Can we list the share?
     try:
         os.makedirs(shared, exist_ok=True)
-        results.append(("ACCESS", True, f"Can access {shared}"))
+        entries = os.listdir(shared)
+        results.append(("ACCESS", True, f"Share accessible ({len(entries)} items)"))
     except Exception as e:
         results.append(("ACCESS", False, f"Cannot access {shared}: {e}"))
         return results
 
-    # Test 3: Write/read file
-    test_file = os.path.join(shared, "_test.txt")
+    # WRITE: Non-fatal — warn but continue to schtasks test
+    test_file = os.path.join(shared, "_healthcheck_.txt")
     try:
-        with open(test_file, "w") as f:
-            f.write("ok")
-        with open(test_file, "r") as f:
-            assert f.read() == "ok"
+        with open(test_file, "w") as f: f.write("healthcheck")
+        with open(test_file, "r") as f: assert f.read() == "healthcheck"
         os.remove(test_file)
-        results.append(("WRITE", True, "Can write/read files on share"))
+        results.append(("WRITE", True, "Read/write test passed"))
     except Exception as e:
-        results.append(("WRITE", False, f"Cannot write: {e}"))
+        results.append(("WRITE", False, f"Write test failed (non-fatal): {e}"))
+        # Don't return — continue to schtasks which is the critical test
 
-    # Test 4: schtasks remote query
+    # SCHTASKS: Remote execution capability — this is the key test
     try:
-        cmd = ["schtasks", "/query", "/s", hostname, "/u", username,
-               "/p", password, "/fo", "list"]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        cmd = ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password, "/fo", "list"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         if r.returncode == 0:
-            results.append(("SCHTASKS", True, f"schtasks works on {hostname}"))
-            results.append(("READY", True, f"Macro will run on {hostname} at {remote_path}"))
+            results.append(("SCHTASKS", True, f"Remote schtasks OK on {hostname}"))
+            results.append(("READY", True, f"Machine ready — macros will run at {remote_path}"))
         else:
-            err = (r.stderr.strip() or r.stdout.strip())[:120]
+            err = (r.stderr.strip() or r.stdout.strip())[:200]
             results.append(("SCHTASKS", False,
-                f"schtasks failed: {err}. Run setup_remote.bat on {hostname} as admin."))
+                f"schtasks failed on {hostname}: {err} — run setup_remote.bat as admin on that machine"))
     except Exception as e:
-        results.append(("SCHTASKS", False, f"schtasks error: {e}"))
+        results.append(("SCHTASKS", False, f"schtasks error on {hostname}: {e}"))
 
     return results
+
 
 
 

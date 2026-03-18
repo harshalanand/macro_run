@@ -102,6 +102,9 @@ async def create_master_machine(
     remote_path: str = Form(""), username: str = Form(""),
     password: str = Form(""), department: str = Form(""),
     location: str = Form(""), tags: str = Form("")):
+    # IP uniqueness check
+    if ip_address.strip() and D.ip_exists_in_master(ip_address.strip()):
+        return JSONResponse({"error": f"IP {ip_address.strip()} is already registered in Machine Master"}, status_code=400)
     D.create_master_machine(machine_name, system_name, ip_address, shared_folder,
                             remote_path, username, password, department, location, tags)
     return RedirectResponse("/machines", 303)
@@ -119,6 +122,9 @@ async def edit_master_machine(mid: int,
     remote_path: str = Form(""), username: str = Form(""),
     password: str = Form(""), department: str = Form(""),
     location: str = Form(""), tags: str = Form("")):
+    # IP uniqueness check (exclude current machine)
+    if ip_address.strip() and D.ip_exists_in_master(ip_address.strip(), exclude_mid=mid):
+        return JSONResponse({"error": f"IP {ip_address.strip()} already registered to another machine"}, status_code=400)
     kw = dict(machine_name=machine_name, system_name=system_name,
               ip_address=ip_address, shared_folder=shared_folder,
               remote_path=remote_path, department=department,
@@ -145,9 +151,20 @@ async def check_master_health(mid: int):
     m = D.get_master_machine(mid)
     if not m: raise HTTPException(404)
     results = E.test_machine_dict(dict(m))
-    ok = all(r[1] for r in results)
+    ok_count = sum(1 for r in results if r[1])
+    fail_count = sum(1 for r in results if not r[1])
+    # WRITE failure alone doesn't make it PARTIAL — only if a critical step fails
+    critical_fail = any(not r[1] for r in results if r[0] in ("BLOCKED","CONFIG","AUTH","ACCESS","SCHTASKS"))
+    warning_only  = fail_count > 0 and not critical_fail
+    if ok_count and not fail_count:
+        status = "OK"
+    elif ok_count and warning_only:
+        status = "OK"       # WRITE warn is not a real failure
+    elif ok_count and critical_fail:
+        status = "PARTIAL"
+    else:
+        status = "FAIL"
     detail = " | ".join(f"{'OK' if r[1] else 'FAIL'} {r[0]}: {r[2]}" for r in results)
-    status = "OK" if ok else ("PARTIAL" if any(r[1] for r in results) else "FAIL")
     D.update_master_health(mid, status, detail)
     return JSONResponse({"status": status, "results": [{"step": r[0], "ok": r[1], "msg": r[2]} for r in results]})
 
@@ -157,9 +174,15 @@ async def check_all_health():
     results = {}
     for m in machines:
         res = E.test_machine_dict(dict(m))
-        ok = all(r[1] for r in res)
+        ok_count = sum(1 for r in res if r[1])
+        critical_fail = any(not r[1] for r in res if r[0] in ("BLOCKED","CONFIG","AUTH","ACCESS","SCHTASKS"))
+        if ok_count and not critical_fail:
+            status = "OK"
+        elif ok_count and critical_fail:
+            status = "PARTIAL"
+        else:
+            status = "FAIL"
         detail = " | ".join(f"{'OK' if r[1] else 'FAIL'} {r[0]}: {r[2]}" for r in res)
-        status = "OK" if ok else ("PARTIAL" if any(r[1] for r in res) else "FAIL")
         D.update_master_health(m["master_id"], status, detail)
         results[m["master_id"]] = {"status": status, "name": m["machine_name"]}
     return JSONResponse(results)
@@ -189,7 +212,7 @@ async def group_detail(r: Request, gid: int):
     return tpl.TemplateResponse("app.html", {"request": r, "page": "gdetail",
         "g": g, "machines": D.get_machines(gid), "files": D.get_files(gid),
         "cats": D.get_categories(gid), "jobs": D.get_jobs(20, gid),
-        "master_machines_all": D.get_master_machines()})
+        "master_machines_all": D.get_master_machines_unassigned()})
 
 @app.get("/jobs", response_class=HTMLResponse)
 async def jobs_page(r: Request):
