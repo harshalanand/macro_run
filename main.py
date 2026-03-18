@@ -38,7 +38,97 @@ if "--reload" in sys.argv or any("--reload" in str(a) for a in sys.argv):
 async def dashboard(r: Request):
     return tpl.TemplateResponse("app.html", {"request": r, "page": "dash", "s": D.get_dashboard()})
 
-@app.get("/groups", response_class=HTMLResponse)
+@app.get("/machines", response_class=HTMLResponse)
+async def machines_page(r: Request, tag: str = ""):
+    machines = D.get_master_machines(tag or None)
+    tags = D.get_master_tags()
+    groups = D.get_groups()
+    return tpl.TemplateResponse("app.html", {
+        "request": r, "page": "machines",
+        "machines": machines, "tags": tags,
+        "groups": groups, "active_tag": tag
+    })
+
+@app.post("/api/master-machines")
+async def create_master_machine(
+    machine_name: str = Form(...), system_name: str = Form(""),
+    ip_address: str = Form(""), shared_folder: str = Form(""),
+    remote_path: str = Form(""), username: str = Form(""),
+    password: str = Form(""), department: str = Form(""),
+    location: str = Form(""), tags: str = Form("")):
+    D.create_master_machine(machine_name, system_name, ip_address, shared_folder,
+                            remote_path, username, password, department, location, tags)
+    return RedirectResponse("/machines", 303)
+
+@app.get("/api/master-machines/{mid}")
+async def get_master_machine_json(mid: int):
+    m = D.get_master_machine(mid)
+    if not m: raise HTTPException(404)
+    return JSONResponse({k: m[k] for k in m.keys()})
+
+@app.post("/api/master-machines/{mid}/edit")
+async def edit_master_machine(mid: int,
+    machine_name: str = Form(...), system_name: str = Form(""),
+    ip_address: str = Form(""), shared_folder: str = Form(""),
+    remote_path: str = Form(""), username: str = Form(""),
+    password: str = Form(""), department: str = Form(""),
+    location: str = Form(""), tags: str = Form("")):
+    kw = dict(machine_name=machine_name, system_name=system_name,
+              ip_address=ip_address, shared_folder=shared_folder,
+              remote_path=remote_path, department=department,
+              location=location, tags=tags)
+    if password.strip():
+        kw["password"] = password
+    D.update_master_machine(mid, **kw)
+    return RedirectResponse("/machines", 303)
+
+@app.post("/api/master-machines/{mid}/delete")
+async def delete_master_machine(mid: int):
+    D.delete_master_machine(mid)
+    return RedirectResponse("/machines", 303)
+
+@app.post("/api/master-machines/{mid}/toggle")
+async def toggle_master_machine(mid: int):
+    m = D.get_master_machine(mid)
+    if m:
+        D.update_master_machine(mid, is_active=0 if m["is_active"] else 1)
+    return RedirectResponse("/machines", 303)
+
+@app.post("/api/master-machines/{mid}/health")
+async def check_master_health(mid: int):
+    m = D.get_master_machine(mid)
+    if not m: raise HTTPException(404)
+    results = E.test_machine_dict(dict(m))
+    ok = all(r[1] for r in results)
+    detail = " | ".join(f"{'OK' if r[1] else 'FAIL'} {r[0]}: {r[2]}" for r in results)
+    status = "OK" if ok else ("PARTIAL" if any(r[1] for r in results) else "FAIL")
+    D.update_master_health(mid, status, detail)
+    return JSONResponse({"status": status, "results": [{"step": r[0], "ok": r[1], "msg": r[2]} for r in results]})
+
+@app.post("/api/master-machines/health-all")
+async def check_all_health():
+    machines = D.get_master_machines()
+    results = {}
+    for m in machines:
+        res = E.test_machine_dict(dict(m))
+        ok = all(r[1] for r in res)
+        detail = " | ".join(f"{'OK' if r[1] else 'FAIL'} {r[0]}: {r[2]}" for r in res)
+        status = "OK" if ok else ("PARTIAL" if any(r[1] for r in res) else "FAIL")
+        D.update_master_health(m["master_id"], status, detail)
+        results[m["master_id"]] = {"status": status, "name": m["machine_name"]}
+    return JSONResponse(results)
+
+@app.post("/api/groups/{gid}/add-from-master")
+async def add_from_master(gid: int, master_ids: str = Form(...)):
+    added = 0
+    for mid_str in master_ids.split(","):
+        mid_str = mid_str.strip()
+        if mid_str.isdigit():
+            D.add_master_to_group(gid, int(mid_str))
+            added += 1
+    return RedirectResponse(f"/groups/{gid}", 303)
+
+
 async def groups_page(r: Request):
     return tpl.TemplateResponse("app.html", {"request": r, "page": "groups", "groups": D.get_groups()})
 
@@ -48,7 +138,8 @@ async def group_detail(r: Request, gid: int):
     if not g: raise HTTPException(404)
     return tpl.TemplateResponse("app.html", {"request": r, "page": "gdetail",
         "g": g, "machines": D.get_machines(gid), "files": D.get_files(gid),
-        "cats": D.get_categories(gid), "jobs": D.get_jobs(20, gid)})
+        "cats": D.get_categories(gid), "jobs": D.get_jobs(20, gid),
+        "master_machines_all": D.get_master_machines()})
 
 @app.get("/jobs", response_class=HTMLResponse)
 async def jobs_page(r: Request):

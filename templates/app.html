@@ -11,7 +11,6 @@
 --ok:#00b894;--ok2:#55efc4;--err:#e17055;--err2:#fab1a0;--warn:#fdcb6e;--blue:#74b9ff;--r:8px}
 body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;display:flex}
 a{color:var(--ac2);text-decoration:none}a:hover{color:var(--tx)}
-
 .sb{width:220px;background:var(--bg2);border-right:1px solid var(--bdr);padding:16px 0;position:fixed;top:0;left:0;bottom:0;display:flex;flex-direction:column;z-index:10}
 .sb .logo{padding:0 20px 16px;border-bottom:1px solid var(--bdr);margin-bottom:6px}
 .sb .logo h1{font-size:14px;font-weight:700;color:var(--ac2);letter-spacing:-.3px}
@@ -23,72 +22,72 @@ a{color:var(--ac2);text-decoration:none}a:hover{color:var(--tx)}
 .sb nav .sep{height:1px;background:var(--bdr);margin:8px 0}
 .sb nav a svg{width:16px;height:16px;opacity:.65;flex-shrink:0}
 .sb nav a.on svg{opacity:1}
-
 .mn{margin-left:220px;flex:1;min-height:100vh}
-.top{padding:16px 28px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;background:var(--bg);position:sticky;top:0;z-index:5}
-.top h2{font-size:16px;font-weight:600}
-.top .act{display:flex;gap:6px;align-items:center}
-.ct{padding:24px 28px}
-
-.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:6px;font-size:12.5px;font-weight:600;font-family:inherit;border:none;cursor:pointer;transition:.15s}
+.top{padding:14px 28px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;background:var(--bg);position:sticky;top:0;z-index:5;gap:12px}
+.top h2{font-size:15px;font-weight:600;white-space:nowrap}
+.top .act{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.ct{padding:22px 28px}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:6px;font-size:12.5px;font-weight:600;font-family:inherit;border:none;cursor:pointer;transition:.15s;white-space:nowrap}
 .btn-p{background:var(--ac);color:#fff}.btn-p:hover{background:#7c6ef0}
 .btn-g{background:var(--ok);color:#000}.btn-g:hover{background:#00d2a4}
 .btn-r{background:var(--err);color:#fff}.btn-r:hover{background:#e88873}
 .btn-o{background:transparent;border:1px solid var(--bdr);color:var(--tx2)}.btn-o:hover{background:var(--bg3);color:var(--tx)}
-.btn-s{padding:4px 9px;font-size:11px}
+.btn-s{padding:4px 10px;font-size:11px}
 .btn-w{background:var(--warn);color:#000}
-
 .card{background:var(--bg2);border:1px solid var(--bdr);border-radius:var(--r);padding:18px;margin-bottom:14px}
-.card h3{font-size:13px;font-weight:600;margin-bottom:12px;color:var(--tx2)}
-
-.sg{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+.card h3{font-size:12px;font-weight:600;margin-bottom:12px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px}
+.sg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px}
 .st{background:var(--bg2);border:1px solid var(--bdr);border-radius:var(--r);padding:14px 16px}
-.st .lb{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;font-weight:500}
-.st .vl{font-size:24px;font-weight:700;margin-top:3px;font-family:'JetBrains Mono',monospace}
+.st .lb{font-size:10.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;font-weight:500}
+.st .vl{font-size:22px;font-weight:700;margin-top:4px;font-family:'JetBrains Mono',monospace}
 .st .vl.g{color:var(--ok)}.st .vl.r{color:var(--err)}.st .vl.b{color:var(--blue)}
-
 table{width:100%;border-collapse:collapse;font-size:12.5px}
-th{text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);font-weight:600;border-bottom:1px solid var(--bdr);background:var(--bg3)}
+th{text-align:left;padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);font-weight:600;border-bottom:1px solid var(--bdr);background:var(--bg3);white-space:nowrap}
 td{padding:8px 12px;border-bottom:1px solid var(--bdr);vertical-align:middle}
-tr:hover td{background:rgba(108,92,231,.03)}
-
-.badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:10.5px;font-weight:600;letter-spacing:.3px}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(108,92,231,.04)}
+td .act-cell{display:flex;gap:5px;align-items:center;flex-wrap:nowrap}
+.badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:10.5px;font-weight:600;letter-spacing:.3px;white-space:nowrap}
 .b-ok{background:rgba(0,184,148,.15);color:var(--ok2)}
 .b-err{background:rgba(225,112,85,.15);color:var(--err2)}
 .b-warn{background:rgba(253,203,110,.15);color:var(--warn)}
 .b-blue{background:rgba(116,185,255,.15);color:var(--blue)}
 .b-gray{background:rgba(155,163,184,.1);color:var(--tx3)}
-
-.fg{display:flex;flex-direction:column;gap:3px;flex:1;min-width:160px}
-.fg label{font-size:11px;color:var(--tx3);font-weight:500}
+.tag{display:inline-block;padding:2px 7px;background:var(--bg4);border-radius:4px;font-size:10.5px;font-family:'JetBrains Mono',monospace;color:var(--tx2)}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:12px;font-size:11px;background:var(--bg4);border:1px solid var(--bdr);color:var(--tx2);text-decoration:none}
+.fg{display:flex;flex-direction:column;gap:3px;flex:1;min-width:140px}
+.fg label{font-size:11px;color:var(--tx3);font-weight:500;margin-bottom:1px}
 .fr{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
 input[type="text"],input[type="email"],input[type="password"],input[type="number"],select,textarea{
 background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;padding:8px 10px;color:var(--tx);font-size:12.5px;font-family:inherit;width:100%;outline:none;transition:.15s}
 input:focus,select:focus,textarea:focus{border-color:var(--ac)}
 input[type="file"]{padding:7px;font-size:11px}
+input[type="checkbox"]{width:auto;accent-color:var(--ac);cursor:pointer}
 textarea{resize:vertical;min-height:60px}
-
 .empty{text-align:center;padding:32px;color:var(--tx3);font-size:13px}
 .mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}
-.trunc{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block}
+.trunc{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle}
 .fx{display:flex;align-items:center;gap:7px}
 .mt{margin-top:12px}.mb{margin-bottom:12px}
-.tag{display:inline-block;padding:2px 7px;background:var(--bg4);border-radius:4px;font-size:10.5px;font-family:'JetBrains Mono',monospace;color:var(--tx2)}
-
-.lt td{font-family:'JetBrains Mono',monospace;font-size:11px;padding:5px 8px}
+.lt td{font-family:'JetBrains Mono',monospace;font-size:11px;padding:5px 10px}
 .le{color:var(--err)}.lw{color:var(--warn)}.li{color:var(--tx3)}
-
-.mo-bg{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:100;justify-content:center;align-items:center}
-.mo-bg.show{display:flex}
-.mo{background:var(--bg2);border:1px solid var(--bdr);border-radius:var(--r);padding:20px;width:540px;max-height:80vh;overflow-y:auto}
-.mo h3{margin-bottom:14px;font-size:15px}
-
-.pulse{animation:pulse 2s infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.cat-list{display:flex;flex-wrap:wrap;gap:6px}.cat-item{display:inline-flex;align-items:center;gap:4px;background:var(--bg4);padding:4px 10px;border-radius:5px;font-size:12px;font-family:'JetBrains Mono',monospace}
+.cat-list{display:flex;flex-wrap:wrap;gap:6px}
+.cat-item{display:inline-flex;align-items:center;gap:4px;background:var(--bg4);padding:4px 10px;border-radius:5px;font-size:12px;font-family:'JetBrains Mono',monospace}
 .cat-item form{display:inline}
 .cat-item button{background:none;border:none;color:var(--err);cursor:pointer;font-size:14px;padding:0 2px}
-.toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:8px;font-size:13px;font-weight:500;z-index:200;display:none}
-.toast.ok{background:#00b894;color:#000;display:block}.toast.fail{background:#e17055;color:#fff;display:block}
+.mo-bg{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);z-index:100;justify-content:center;align-items:center}
+.mo-bg.show{display:flex}
+.mo{background:var(--bg2);border:1px solid var(--bdr);border-radius:var(--r);padding:22px;width:600px;max-width:96vw;max-height:88vh;overflow-y:auto}
+.mo h3{margin-bottom:16px;font-size:15px;font-weight:600}
+.search-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.search-bar input,.search-bar select{background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:7px 11px;color:var(--tx);font-size:12.5px;font-family:inherit;outline:none}
+.search-bar input{flex:1;min-width:200px}.search-bar select{min-width:130px}
+.search-bar input:focus,.search-bar select:focus{border-color:var(--ac)}
+.pulse{animation:pulse 2s infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:8px;font-size:13px;font-weight:500;z-index:999;display:none;max-width:420px;line-height:1.4}
+.toast.ok{background:#00b894;color:#000;display:block}
+.toast.fail{background:#e17055;color:#fff;display:block}
+.toast.info{background:#74b9ff;color:#000;display:block}
 </style>
 </head>
 <body>
@@ -96,6 +95,7 @@ textarea{resize:vertical;min-height:60px}
 <div class="logo"><h1>MACRO RUNNER</h1><span>Queue-Based v3.0</span></div>
 <nav>
 <a href="/" class="{% if page=='dash' %}on{% endif %}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Dashboard</a>
+<a href="/machines" class="{% if page=='machines' %}on{% endif %}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Machines</a>
 <a href="/groups" class="{% if page in ('groups','gdetail') %}on{% endif %}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>Groups</a>
 <a href="/jobs" class="{% if page in ('jobs','jdetail') %}on{% endif %}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Jobs</a>
 <a href="/logs" class="{% if page=='logs' %}on{% endif %}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Audit Logs</a>
@@ -104,11 +104,10 @@ textarea{resize:vertical;min-height:60px}
 <a href="/settings" class="{% if page=='settings' %}on{% endif %}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>Settings</a>
 </nav>
 </aside>
-
 <div class="mn">
 <div id="toast" class="toast"></div>
 
-{# ═══════════ DASHBOARD ═══════════ #}
+{# ═══ DASHBOARD ═══ #}
 {% if page=='dash' %}
 <div class="top"><h2>Dashboard</h2></div>
 <div class="ct">
@@ -120,8 +119,7 @@ textarea{resize:vertical;min-height:60px}
 <div class="st"><div class="lb">Failed (7d)</div><div class="vl r">{{s.week_fail}}</div></div>
 </div>
 <div class="card"><h3>Recent Jobs</h3>
-{% if s.recent_jobs %}
-<table><tr><th>Job</th><th>Group</th><th>Date</th><th>Status</th><th>Cats</th><th>OK</th><th>Fail</th><th></th></tr>
+{% if s.recent_jobs %}<table><tr><th>Job</th><th>Group</th><th>Date</th><th>Status</th><th>Cats</th><th>OK</th><th>Fail</th><th></th></tr>
 {% for j in s.recent_jobs %}<tr>
 <td class="mono">#{{j.job_id}}</td><td>{{j.group_name}}</td><td class="mono">{{j.job_date}}</td>
 <td>{% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUNNING</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}</td>
@@ -129,22 +127,122 @@ textarea{resize:vertical;min-height:60px}
 <td><a href="/jobs/{{j.job_id}}" class="btn btn-o btn-s">View</a></td>
 </tr>{% endfor %}</table>
 {% else %}<div class="empty">No jobs yet.</div>{% endif %}</div>
-{% if s.failures %}
-<div class="card"><h3>Recent Failures</h3><table><tr><th>Machine</th><th>Category</th><th>Date</th><th>Error</th></tr>
-{% for f in s.failures %}<tr><td>{{f.machine_name}}</td><td><span class="tag">{{f.cat_value}}</span></td><td class="mono">{{f.job_date}}</td>
-<td style="color:var(--err);font-size:11px">{{f.error_message[:100] if f.error_message else '-'}}</td></tr>{% endfor %}</table></div>
-{% endif %}
+{% if s.failures %}<div class="card"><h3>Recent Failures</h3>
+<table><tr><th>Machine</th><th>Category</th><th>Date</th><th>Error</th></tr>
+{% for f in s.failures %}<tr>
+<td>{{f.machine_name}}</td><td><span class="tag">{{f.cat_value}}</span></td><td class="mono">{{f.job_date}}</td>
+<td style="color:var(--err);font-size:11px;max-width:300px">{{f.error_message[:120] if f.error_message else '-'}}</td>
+</tr>{% endfor %}</table></div>{% endif %}
 </div>
 
-{# ═══════════ GROUPS LIST ═══════════ #}
+{# ═══ MACHINE MASTER ═══ #}
+{% elif page=='machines' %}
+<div class="top"><h2>Machine Master</h2>
+<div class="act">
+<button class="btn btn-w btn-s" onclick="checkAllHealth()" id="btnCheckAll">&#9889; Check All</button>
+<button class="btn btn-p" onclick="$('addMachMo').classList.add('show')">+ Add Machine</button>
+</div></div>
+<div class="ct">
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
+<span style="font-size:11px;color:var(--tx3);font-weight:600;margin-right:2px">TAGS:</span>
+<a href="/machines" class="chip" style="{% if not active_tag %}background:var(--ac);border-color:var(--ac);color:#fff{% endif %}">All</a>
+{% for t in tags %}<a href="/machines?tag={{t}}" class="chip" style="{% if active_tag==t %}background:var(--ac);border-color:var(--ac);color:#fff{% endif %}">{{t}}</a>{% endfor %}
+</div>
+<div class="search-bar">
+<input id="mSearch" type="text" placeholder="&#128269;  Search name, system, IP, dept..." oninput="filterMachines(this.value)">
+<select id="mHealthFilter" onchange="filterMachines($('mSearch').value)">
+<option value="">All Health</option>
+<option value="OK">OK</option>
+<option value="PARTIAL">Partial</option>
+<option value="FAIL">Fail</option>
+<option value="UNKNOWN">Unknown</option>
+</select>
+<span id="mCount" style="font-size:11px;color:var(--tx3);white-space:nowrap"></span>
+</div>
+{% if machines %}
+<div class="card" style="padding:0;overflow:hidden;overflow-x:auto">
+<table id="mTable">
+<tr>
+<th style="width:30px"><input type="checkbox" id="chkAll" onclick="toggleAllChecks(this)" title="Select all"></th>
+<th>Machine</th><th>System / IP</th><th>Shared Folder (UNC)</th><th>Remote Path</th>
+<th>Username</th><th>Dept</th><th>Tags</th><th>Health</th><th>Last Check</th><th>Actions</th>
+</tr>
+{% for m in machines %}<tr id="mrow_{{m.master_id}}" data-name="{{m.machine_name|lower}}" data-sys="{{(m.system_name or '')|lower}}" data-ip="{{(m.ip_address or '')|lower}}" data-dept="{{(m.department or '')|lower}}" data-health="{{m.health_status or 'UNKNOWN'}}" style="{% if not m.is_active %}opacity:.4{% endif %}">
+<td><input type="checkbox" class="mchk" value="{{m.master_id}}"></td>
+<td style="font-weight:600;min-width:110px">{{m.machine_name}}</td>
+<td class="mono" style="min-width:110px">{{m.system_name or '-'}}<br><span style="color:var(--tx3);font-size:10.5px">{{m.ip_address or ''}}</span></td>
+<td class="mono trunc" style="min-width:140px" title="{{m.shared_folder or ''}}">{{m.shared_folder or '-'}}</td>
+<td class="mono trunc" style="min-width:110px" title="{{m.remote_path or ''}}">{% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}</td>
+<td class="mono" style="font-size:11px">{{m.username or '-'}}</td>
+<td style="font-size:12px;min-width:70px">{{m.department or ''}}</td>
+<td style="min-width:80px">{% if m.tags %}{% for t in m.tags.split(',') %}{% if t.strip() %}<span class="chip" style="font-size:10px;padding:2px 6px;margin:1px 2px">{{t.strip()}}</span>{% endif %}{% endfor %}{% endif %}</td>
+<td id="health_{{m.master_id}}" style="min-width:90px">
+{% if m.health_status=='OK' %}<span class="badge b-ok">OK</span>
+{% elif m.health_status=='PARTIAL' %}<span class="badge b-warn">Partial</span>
+{% elif m.health_status=='FAIL' %}<span class="badge b-err">Fail</span>
+{% else %}<span class="badge b-gray">Unknown</span>{% endif %}
+</td>
+<td class="mono" style="font-size:10px;color:var(--tx3);white-space:nowrap;min-width:110px">{{m.health_checked_at[:16] if m.health_checked_at else '-'}}</td>
+<td style="min-width:240px"><div class="act-cell">
+<button class="btn btn-o btn-s" onclick="checkHealth({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
+<button class="btn btn-o btn-s" onclick="viewDetail({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Detail</button>
+<button class="btn btn-o btn-s" onclick="loadEditMaster({{m.master_id}})">Edit</button>
+<form method="post" action="/api/master-machines/{{m.master_id}}/toggle" style="margin:0"><button class="btn btn-o btn-s">{{'Off' if m.is_active else 'On'}}</button></form>
+<form method="post" action="/api/master-machines/{{m.master_id}}/delete" style="margin:0" onsubmit="return confirm('Delete {{m.machine_name}}?')"><button class="btn btn-s" style="color:var(--err);border:1px solid var(--err);background:transparent">Del</button></form>
+</div></td>
+</tr>{% endfor %}
+</table>
+<div id="mNoResults" style="display:none" class="empty">No machines match filter.</div>
+</div>
+<div class="card mt" id="bulkPanel" style="display:none">
+<h3>Assign Selected Machines to Group</h3>
+<form method="post" id="bulkForm" action="">
+<input type="hidden" name="master_ids" id="bulkIds">
+<div class="fr">
+<div class="fg"><label>Target Group</label>
+<select id="bulkGroup" onchange="$('bulkForm').action='/api/groups/'+this.value+'/add-from-master'">
+<option value="">Select group...</option>
+{% for g in groups %}<option value="{{g.group_id}}">{{g.group_name}}</option>{% endfor %}
+</select></div>
+<div style="display:flex;align-items:flex-end"><button class="btn btn-p" type="submit" onclick="prepareBulk(event)">Add to Group</button></div>
+</div></form>
+</div>
+{% else %}<div class="empty">No machines yet. Click "+ Add Machine" to get started.</div>{% endif %}
+</div>
+
+<div class="mo-bg" id="addMachMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Add Machine to Master</h3>
+<form method="post" action="/api/master-machines">
+<div class="fr"><div class="fg"><label>Machine Name *</label><input type="text" name="machine_name" required placeholder="PC-SALES-01"></div><div class="fg"><label>System / Hostname</label><input type="text" name="system_name" placeholder="PCSAL01"></div></div>
+<div class="fr"><div class="fg"><label>Shared Folder (UNC, server copies here)</label><input type="text" name="shared_folder" placeholder="\\PCSAL01\Share\Macro"></div><div class="fg"><label>Remote Local Path (on that PC)</label><input type="text" name="remote_path" placeholder="D:\Share\Macro"></div></div>
+<div style="font-size:10.5px;color:var(--warn);padding:2px 0 8px;line-height:1.5">UNC path is how the server reaches the folder. Remote path is how the same folder looks on the remote PC's local drive.</div>
+<div class="fr"><div class="fg"><label>IP Address</label><input type="text" name="ip_address" placeholder="192.168.1.101"></div><div class="fg"><label>Login Username</label><input type="text" name="username" placeholder=".\administrator"></div></div>
+<div class="fr"><div class="fg"><label>Login Password</label><input type="password" name="password"></div><div class="fg"><label>Department</label><input type="text" name="department" placeholder="Sales"></div></div>
+<div class="fr"><div class="fg"><label>Location</label><input type="text" name="location" placeholder="Floor 2"></div><div class="fg"><label>Tags (comma-separated)</label><input type="text" name="tags" placeholder="sales, floor2, region-north"></div></div>
+<div class="fx mt" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Add Machine</button></div>
+</form></div></div>
+
+<div class="mo-bg" id="editMasterMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Edit Machine</h3>
+<form method="post" id="editMasterForm">
+<div class="fr"><div class="fg"><label>Machine Name *</label><input type="text" name="machine_name" id="em2_name" required></div><div class="fg"><label>System / Hostname</label><input type="text" name="system_name" id="em2_sys"></div></div>
+<div class="fr"><div class="fg"><label>Shared Folder (UNC)</label><input type="text" name="shared_folder" id="em2_folder"></div><div class="fg"><label>Remote Local Path</label><input type="text" name="remote_path" id="em2_remote"></div></div>
+<div class="fr"><div class="fg"><label>IP Address</label><input type="text" name="ip_address" id="em2_ip"></div><div class="fg"><label>Login Username</label><input type="text" name="username" id="em2_user"></div></div>
+<div class="fr"><div class="fg"><label>Password (blank = keep current)</label><input type="password" name="password" id="em2_pass"></div><div class="fg"><label>Department</label><input type="text" name="department" id="em2_dept"></div></div>
+<div class="fr"><div class="fg"><label>Location</label><input type="text" name="location" id="em2_loc"></div><div class="fg"><label>Tags</label><input type="text" name="tags" id="em2_tags"></div></div>
+<div class="fx mt" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Save</button></div>
+</form></div></div>
+
+<div class="mo-bg" id="detailMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3 id="detailTitle">Health Detail</h3>
+<div id="detailBody" style="font-size:12.5px;line-height:1.8"></div>
+<div class="fx mt" style="justify-content:flex-end"><button class="btn btn-o" onclick="$('detailMo').classList.remove('show')">Close</button></div>
+</div></div>
+
+{# ═══ GROUPS LIST ═══ #}
 {% elif page=='groups' %}
 <div class="top"><h2>Machine Groups</h2><div class="act"><button class="btn btn-p" onclick="$('newGrp').classList.add('show')">+ New Group</button></div></div>
 <div class="ct">
-{% if groups %}
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
-{% for g in groups %}
-<a href="/groups/{{g.group_id}}" class="card" style="text-decoration:none;transition:border .15s">
-<h3 style="color:var(--tx);font-size:15px;margin-bottom:6px">{{g.group_name}}</h3>
+{% if groups %}<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">
+{% for g in groups %}<a href="/groups/{{g.group_id}}" class="card" style="text-decoration:none;transition:border .15s;cursor:pointer;display:block">
+<div style="font-size:15px;font-weight:600;color:var(--tx);margin-bottom:6px">{{g.group_name}}</div>
 <p style="font-size:11px;color:var(--tx3);margin-bottom:10px">{{g.description or 'No description'}}</p>
 <div class="fx"><span class="tag">{{g.machine_count}} machines</span><span class="tag">{{g.file_count}} files</span><span class="tag">{{g.cat_count}} categories</span></div>
 </a>{% endfor %}</div>
@@ -153,83 +251,84 @@ textarea{resize:vertical;min-height:60px}
 <div class="mo-bg" id="newGrp" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>New Group</h3>
 <form method="post" action="/api/groups"><div class="fg mb"><label>Name</label><input type="text" name="name" required></div>
 <div class="fg mb"><label>Description</label><textarea name="description"></textarea></div>
-<div class="fx" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Create</button></div></form></div></div>
+<div class="fx" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Create</button></div>
+</form></div></div>
 
-{# ═══════════ GROUP DETAIL ═══════════ #}
+{# ═══ GROUP DETAIL ═══ #}
 {% elif page=='gdetail' %}
 <div class="top"><h2>{{g.group_name}}</h2>
 <div class="act">
-<form method="post" action="/api/groups/{{g.group_id}}/run" style="display:inline"><button class="btn btn-g" onclick="return confirm('Run job? Categories will be distributed across machines.')">Run Job</button></form>
+<form method="post" action="/api/groups/{{g.group_id}}/run" style="display:inline"><button class="btn btn-g" onclick="return confirm('Run job? Categories will be distributed across machines.')">&#9654; Run Job</button></form>
 <form method="post" action="/api/groups/{{g.group_id}}/delete" style="display:inline"><button class="btn btn-r btn-s" onclick="return confirm('Delete group and all data?')">Delete</button></form>
 </div></div>
 <div class="ct">
-
-{# Group config #}
 <div class="card"><h3>Macro Configuration</h3>
 <form method="post" action="/api/groups/{{g.group_id}}/update">
 <input type="hidden" name="group_name" value="{{g.group_name}}">
 <input type="hidden" name="description" value="{{g.description or ''}}">
 <div class="fr">
-<div class="fg"><label>Excel File to Open & Run</label><input type="text" name="excel_file_name" value="{{g.excel_file_name or ''}}" placeholder="Report.xlsm" required></div>
+<div class="fg"><label>Excel File to Open</label><input type="text" name="excel_file_name" value="{{g.excel_file_name or ''}}" placeholder="Report.xlsm" required></div>
 <div class="fg"><label>Macro Name</label><input type="text" name="macro_name" value="{{g.macro_name or ''}}" placeholder="Module1.RunReport" required></div>
-<div class="fg" style="max-width:120px"><label>Paste Cell</label><input type="text" name="target_cell" value="{{g.target_cell or 'A1'}}" placeholder="A1"></div>
+<div class="fg" style="max-width:110px"><label>Paste Cell</label><input type="text" name="target_cell" value="{{g.target_cell or 'A1'}}"></div>
 </div>
-<div style="font-size:11px;color:var(--tx3);margin-bottom:10px">For each category: open Excel file → paste category value into the cell → run macro → collect output</div>
+<div style="font-size:11px;color:var(--tx3);margin-bottom:10px">For each category: open Excel file, paste category into cell, run macro, collect output.</div>
 <button class="btn btn-p btn-s">Save Config</button>
 </form></div>
 
-{# Files #}
-<div class="card">
-<div class="fx mb" style="justify-content:space-between"><h3 style="margin:0">Files ({{files|length}})</h3>
-<button class="btn btn-o btn-s" onclick="$('uploadMo').classList.add('show')">Upload Files</button></div>
+<div class="card"><div class="fx mb" style="justify-content:space-between">
+<h3 style="margin:0">Files ({{files|length}})</h3>
+<button class="btn btn-o btn-s" onclick="$('uploadMo').classList.add('show')">Upload Files</button>
+</div>
 {% if files %}<table><tr><th>File</th><th>Size</th><th>Macro File</th><th></th></tr>
 {% for f in files %}<tr>
 <td class="mono">{{f.original_name}}</td><td class="mono">{{"%.1f"|format(f.file_size_kb)}} KB</td>
 <td>{% if f.is_macro_file %}<span class="badge b-blue">MACRO</span>{% else %}<form method="post" action="/api/files/{{f.file_id}}/set-macro" style="display:inline"><button class="btn btn-o btn-s">Set as Macro</button></form>{% endif %}</td>
 <td><form method="post" action="/api/files/{{f.file_id}}/delete" style="display:inline"><button class="btn btn-o btn-s" onclick="return confirm('Delete?')" style="color:var(--err)">Del</button></form></td>
-</tr>{% endfor %}</table>{% else %}<div class="empty">Upload your Excel files.</div>{% endif %}</div>
+</tr>{% endfor %}</table>
+{% else %}<div class="empty">Upload your Excel files.</div>{% endif %}</div>
 
-{# Categories #}
-<div class="card">
-<div class="fx mb" style="justify-content:space-between"><h3 style="margin:0">Categories / Maj No ({{cats|length}})</h3>
-<div class="fx">
+<div class="card"><div class="fx mb" style="justify-content:space-between">
+<h3 style="margin:0">Categories / Maj No ({{cats|length}})</h3>
+<div class="fx" style="gap:6px">
 {% if cats %}<form method="post" action="/api/groups/{{g.group_id}}/clear-categories" style="display:inline"><button class="btn btn-r btn-s" onclick="return confirm('Delete ALL {{cats|length}} categories?')">Clear All</button></form>{% endif %}
-<a href="/api/templates/categories.csv" class="btn btn-o btn-s">Template CSV</a>
+<a href="/api/templates/categories.csv" class="btn btn-o btn-s">Template</a>
 <button class="btn btn-o btn-s" onclick="$('importCatMo').classList.add('show')">Import CSV</button>
 </div></div>
 <form method="post" action="/api/groups/{{g.group_id}}/categories" class="fx mb">
-<input type="text" name="cat_value" placeholder="Enter category / maj no" style="max-width:300px" required>
+<input type="text" name="cat_value" placeholder="Enter category / maj no" style="max-width:280px" required>
 <button class="btn btn-p btn-s">Add</button>
 </form>
-{% if cats %}
-<div class="cat-list">{% for c in cats %}<div class="cat-item">{{c.cat_value}}<form method="post" action="/api/categories/{{c.cat_id}}/delete"><button title="Remove" onclick="return confirm('Remove?')">x</button></form></div>{% endfor %}</div>
-{% else %}<div class="empty">No categories. Add manually or import CSV.</div>{% endif %}</div>
+{% if cats %}<div class="cat-list">
+{% for c in cats %}<div class="cat-item">{{c.cat_value}}<form method="post" action="/api/categories/{{c.cat_id}}/delete"><button title="Remove" onclick="return confirm('Remove?')">x</button></form></div>{% endfor %}
+</div>{% else %}<div class="empty">No categories. Add manually or import CSV.</div>{% endif %}</div>
 
-{# Machines #}
-<div class="card">
-<div class="fx mb" style="justify-content:space-between"><h3 style="margin:0">Machines ({{machines|length}})</h3>
-<div class="fx">
-<a href="/api/templates/machines.csv" class="btn btn-o btn-s">Template CSV</a>
+<div class="card"><div class="fx mb" style="justify-content:space-between">
+<h3 style="margin:0">Machines ({{machines|length}})</h3>
+<div class="fx" style="gap:6px">
+<button class="btn btn-p btn-s" onclick="$('addFromMasterMo').classList.add('show')">+ From Master</button>
+<a href="/api/templates/machines.csv" class="btn btn-o btn-s">Template</a>
 <button class="btn btn-o btn-s" onclick="$('importMo').classList.add('show')">Import CSV</button>
-<button class="btn btn-o btn-s" onclick="$('machMo').classList.add('show')">+ Add</button>
+<button class="btn btn-o btn-s" onclick="$('machMo').classList.add('show')">+ Manual</button>
 </div></div>
-{% if machines %}<table><tr><th>Name</th><th>System</th><th>UNC Folder (Server)</th><th>Remote Path (Local)</th><th>User</th><th>Status</th><th>Actions</th></tr>
+{% if machines %}<table><tr><th>Name</th><th>System</th><th>Shared Folder</th><th>Remote Path</th><th>User</th><th>Status</th><th>Actions</th></tr>
 {% for m in machines %}<tr style="{% if not m.is_active %}opacity:.45{% endif %}">
 <td style="font-weight:600">{{m.machine_name}}</td>
-<td class="mono">{{m.system_name or '-'}}</td>
-<td class="mono trunc" title="{{m.shared_folder}}" style="max-width:180px">{{m.shared_folder}}</td>
-<td class="mono trunc" title="{{m.remote_path}}" style="max-width:140px">{% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}</td>
-<td>{{m.username or '-'}}</td>
+<td class="mono" style="font-size:11.5px">{{m.system_name or '-'}}</td>
+<td class="mono trunc" title="{{m.shared_folder}}">{{m.shared_folder}}</td>
+<td class="mono trunc" title="{{m.remote_path}}">{% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}</td>
+<td class="mono" style="font-size:11px">{{m.username or '-'}}</td>
 <td>{% if m.is_active %}<span class="badge b-ok">On</span>{% else %}<span class="badge b-gray">Off</span>{% endif %}</td>
-<td class="fx" style="gap:3px">
-<button class="btn btn-o btn-s" onclick="testMachine({{m.machine_id}},'{{m.machine_name}}')">Test</button>
+<td><div class="act-cell">
+<button class="btn btn-o btn-s" onclick="testMachine({{m.machine_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
 <button class="btn btn-o btn-s" onclick="editMachine({{m.machine_id}})">Edit</button>
 <form method="post" action="/api/machines/{{m.machine_id}}/toggle" style="display:inline"><button class="btn btn-o btn-s">{{'Off' if m.is_active else 'On'}}</button></form>
-<form method="post" action="/api/machines/{{m.machine_id}}/delete" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Delete machine {{m.machine_name}}?')">Del</button></form>
-</td></tr>{% endfor %}</table>{% else %}<div class="empty">No machines. Add or import from CSV.</div>{% endif %}</div>
+<form method="post" action="/api/machines/{{m.machine_id}}/delete" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Delete?')">Del</button></form>
+</div></td>
+</tr>{% endfor %}</table>
+{% else %}<div class="empty">No machines. Add from Master, import CSV, or add manually.</div>{% endif %}</div>
 
-{# Jobs for this group #}
-{% if jobs %}<div class="card"><h3>Recent Jobs</h3><table><tr><th>Job</th><th>Date</th><th>Status</th><th>Cats</th><th>OK</th><th>Fail</th><th></th></tr>
+{% if jobs %}<div class="card"><h3>Recent Jobs</h3>
+<table><tr><th>Job</th><th>Date</th><th>Status</th><th>Cats</th><th>OK</th><th>Fail</th><th></th></tr>
 {% for j in jobs %}<tr>
 <td class="mono">#{{j.job_id}}</td><td class="mono">{{j.job_date}}</td>
 <td>{% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUN</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}</td>
@@ -238,112 +337,119 @@ textarea{resize:vertical;min-height:60px}
 </tr>{% endfor %}</table></div>{% endif %}
 </div>
 
-{# Modals #}
 <div class="mo-bg" id="uploadMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Upload Files</h3>
 <form method="post" action="/api/groups/{{g.group_id}}/upload" enctype="multipart/form-data">
 <div class="fg mb"><label>Excel Files</label><input type="file" name="files" multiple accept=".xlsx,.xlsm,.xls,.xlsb,.csv" required></div>
 <div class="fx" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Upload</button></div></form></div></div>
 
-<div class="mo-bg" id="machMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Add Machine</h3>
+<div class="mo-bg" id="machMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Add Machine (Manual)</h3>
 <form method="post" action="/api/groups/{{g.group_id}}/machines">
-<div class="fr"><div class="fg"><label>Machine Name *</label><input type="text" name="machine_name" required></div><div class="fg"><label>System/Hostname *</label><input type="text" name="system_name" required placeholder="hopc51 (for schtasks remote exec)"></div></div>
-<div class="fr"><div class="fg"><label>Shared Folder * (UNC - server copies here)</label><input type="text" name="shared_folder" required placeholder="\\hopc51\test"></div><div class="fg"><label>Remote Local Path * (on remote PC)</label><input type="text" name="remote_path" required placeholder="D:\test"></div></div>
-<div style="font-size:10px;color:var(--warn);padding:4px 0 8px;line-height:1.5">Example: If \\hopc51\test maps to D:\test on hopc51, enter \\hopc51\test as Shared Folder and D:\test as Remote Path</div>
+<div class="fr"><div class="fg"><label>Machine Name *</label><input type="text" name="machine_name" required></div><div class="fg"><label>System/Hostname *</label><input type="text" name="system_name" required placeholder="PCSAL01"></div></div>
+<div class="fr"><div class="fg"><label>Shared Folder * (UNC)</label><input type="text" name="shared_folder" required placeholder="\\PCSAL01\test"></div><div class="fg"><label>Remote Local Path *</label><input type="text" name="remote_path" required placeholder="D:\test"></div></div>
+<div style="font-size:10px;color:var(--warn);padding:4px 0 8px;line-height:1.5">Example: \\PCSAL01\test maps to D:\test on PCSAL01</div>
 <div class="fr"><div class="fg"><label>IP Address</label><input type="text" name="ip_address"></div><div class="fg"><label>Login Username</label><input type="text" name="username" placeholder=".\administrator"></div></div>
-<div class="fr"><div class="fg"><label>Login Password</label><input type="password" name="password" placeholder="For net use + schtasks auth"></div><div class="fg"><label>Department</label><input type="text" name="department"></div></div>
+<div class="fr"><div class="fg"><label>Login Password</label><input type="password" name="password"></div><div class="fg"><label>Department</label><input type="text" name="department"></div></div>
 <input type="hidden" name="location" value="">
-<div class="fx mt" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Add</button></div></form></div></div>
+<div class="fx mt" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Add</button></div>
+</form></div></div>
 
 <div class="mo-bg" id="importMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Import Machines CSV</h3>
 <form method="post" action="/api/groups/{{g.group_id}}/import-machines" enctype="multipart/form-data">
 <p style="font-size:11px;color:var(--tx3);margin-bottom:10px">Columns: name, system_name, ip, shared_folder, remote_path, username, password, department, location. <a href="/api/templates/machines.csv">Download template</a></p>
 <div class="fg mb"><input type="file" name="file" accept=".csv" required></div>
-<div class="fx" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Import</button></div></form></div></div>
+<div class="fx" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Import</button></div>
+</form></div></div>
 
 <div class="mo-bg" id="importCatMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Import Categories CSV</h3>
 <form method="post" action="/api/groups/{{g.group_id}}/import-categories" enctype="multipart/form-data">
-<p style="font-size:11px;color:var(--tx3);margin-bottom:10px">One value per row, or CSV with header <code>cat_value</code>. Headers are auto-skipped. <a href="/api/templates/categories.csv">Download template</a></p>
+<p style="font-size:11px;color:var(--tx3);margin-bottom:10px">One value per row, or CSV with header <code>cat_value</code>. <a href="/api/templates/categories.csv">Download template</a></p>
 <div class="fg mb"><input type="file" name="file" accept=".csv,.txt" required></div>
-<div class="fx" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Import</button></div></form></div></div>
+<div class="fx" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Import</button></div>
+</form></div></div>
 
-{# Edit Machine Modal #}
 <div class="mo-bg" id="editMachMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Edit Machine</h3>
 <form method="post" id="editMachForm">
 <div class="fr"><div class="fg"><label>Machine Name *</label><input type="text" name="machine_name" id="em_name" required></div><div class="fg"><label>System/Hostname *</label><input type="text" name="system_name" id="em_sys" required></div></div>
-<div class="fr"><div class="fg"><label>Shared Folder * (UNC)</label><input type="text" name="shared_folder" id="em_folder" required></div><div class="fg"><label>Remote Local Path *</label><input type="text" name="remote_path" id="em_remote" required placeholder="D:\test"></div></div>
+<div class="fr"><div class="fg"><label>Shared Folder (UNC)</label><input type="text" name="shared_folder" id="em_folder" required></div><div class="fg"><label>Remote Local Path</label><input type="text" name="remote_path" id="em_remote" required></div></div>
 <div class="fr"><div class="fg"><label>IP Address</label><input type="text" name="ip_address" id="em_ip"></div><div class="fg"><label>Login Username</label><input type="text" name="username" id="em_user"></div></div>
-<div class="fr"><div class="fg"><label>Login Password</label><input type="text" name="password" id="em_pass" placeholder="Leave empty to keep current"></div><div class="fg"><label>Department</label><input type="text" name="department" id="em_dept"></div></div>
+<div class="fr"><div class="fg"><label>Password (blank = keep)</label><input type="password" name="password" id="em_pass"></div><div class="fg"><label>Department</label><input type="text" name="department" id="em_dept"></div></div>
 <input type="hidden" name="location" id="em_loc" value="">
 <div class="fx mt" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Save</button></div>
 </form></div></div>
 
-{# ═══════════ JOBS LIST ═══════════ #}
+<div class="mo-bg" id="addFromMasterMo" onclick="if(event.target===this)this.classList.remove('show')"><div class="mo"><h3>Add Machines from Master</h3>
+<form method="post" action="/api/groups/{{g.group_id}}/add-from-master">
+<p style="font-size:11px;color:var(--tx3);margin-bottom:12px">Select machines to add to this group. Machines already in this group (same name) will be skipped.</p>
+<div style="max-height:320px;overflow-y:auto;border:1px solid var(--bdr);border-radius:6px;margin-bottom:12px">
+<table style="margin:0"><tr><th style="width:32px"></th><th>Machine</th><th>System</th><th>Dept / Tags</th></tr>
+{% for m in master_machines_all %}<tr>
+<td><input type="checkbox" name="master_ids_check" value="{{m.master_id}}" class="masterChk"></td>
+<td style="font-weight:600">{{m.machine_name}}</td><td class="mono" style="font-size:11px">{{m.system_name or '-'}}</td>
+<td style="font-size:11px;color:var(--tx3)">{{m.department or ''}}{% if m.tags %} | {{m.tags}}{% endif %}</td>
+</tr>{% endfor %}</table>
+</div>
+<input type="hidden" name="master_ids" id="masterIdsHidden">
+<div class="fx" style="justify-content:flex-end;gap:6px">
+<button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button>
+<button class="btn btn-p" onclick="gatherMasterIds(event)">Add Selected</button>
+</div></form></div></div>
+
+{# ═══ JOBS LIST ═══ #}
 {% elif page=='jobs' %}
 <div class="top"><h2>All Jobs</h2></div>
 <div class="ct">
-<div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-  <input id="jobSearch" type="text" placeholder="🔍  Search by job #, group, date, status…"
-    style="flex:1;min-width:220px;padding:8px 12px;border:1px solid var(--bdr);border-radius:6px;
-           background:var(--bg2);color:var(--fg);font-size:13px;outline:none"
-    oninput="filterJobs(this.value)">
-  <select id="statusFilter" onchange="filterJobs(document.getElementById('jobSearch').value)"
-    style="padding:8px 12px;border:1px solid var(--bdr);border-radius:6px;
-           background:var(--bg2);color:var(--fg);font-size:13px">
-    <option value="">All Statuses</option>
-    <option value="DONE">Done</option>
-    <option value="RUNNING">Running</option>
-    <option value="PARTIAL">Partial</option>
-    <option value="KILLED">Killed</option>
-  </select>
-  <span id="jobCount" style="color:var(--fg2);font-size:12px;white-space:nowrap"></span>
+<div class="search-bar">
+<input id="jobSearch" type="text" placeholder="&#128269;  Search job #, group, date, status..." oninput="filterJobs(this.value)">
+<select id="statusFilter" onchange="filterJobs($('jobSearch').value)">
+<option value="">All Statuses</option><option value="DONE">Done</option>
+<option value="RUNNING">Running</option><option value="PARTIAL">Partial</option><option value="KILLED">Killed</option>
+</select>
+<span id="jobCount" style="font-size:11px;color:var(--tx3);white-space:nowrap"></span>
 </div>
-{% if jobs %}<table id="jobsTable"><tr><th>Job</th><th>Group</th><th>Date</th><th>Status</th><th>Cats</th><th>OK</th><th>Fail</th><th>Trigger</th><th></th></tr>
-{% for j in jobs %}<tr data-job="#{{j.job_id}}" data-group="{{j.group_name|lower}}" data-date="{{j.job_date}}"
-  data-status="{% if j.status=='COMPLETED' %}DONE{% elif j.status=='RUNNING' %}RUNNING{% elif 'ERROR' in j.status %}PARTIAL{% else %}{{j.status}}{% endif %}">
-<td class="mono">#{{j.job_id}}</td><td>{{j.group_name}}</td><td class="mono">{{j.job_date}}</td>
+{% if jobs %}
+<div class="card" style="padding:0;overflow:hidden">
+<table id="jobsTable">
+<tr><th>Job</th><th>Group</th><th>Date</th><th>Status</th><th>Cats</th><th>OK</th><th>Fail</th><th>Trigger</th><th></th></tr>
+{% for j in jobs %}<tr data-job="#{{j.job_id}}" data-group="{{j.group_name|lower}}" data-date="{{j.job_date}}" data-status="{% if j.status=='COMPLETED' %}DONE{% elif j.status=='RUNNING' %}RUNNING{% elif 'ERROR' in j.status %}PARTIAL{% else %}{{j.status}}{% endif %}">
+<td class="mono" style="font-weight:600">#{{j.job_id}}</td>
+<td>{{j.group_name}}</td><td class="mono">{{j.job_date}}</td>
 <td>{% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUN</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}</td>
-<td class="mono">{{j.total_cats}}</td><td style="color:var(--ok)">{{j.completed_cats}}</td><td style="color:var(--err)">{{j.failed_cats}}</td>
+<td class="mono">{{j.total_cats}}</td><td class="mono" style="color:var(--ok)">{{j.completed_cats}}</td><td class="mono" style="color:var(--err)">{{j.failed_cats}}</td>
 <td><span class="tag">{{j.triggered_by}}</span></td>
-<td style="display:flex;gap:6px;align-items:center">
-  <a href="/jobs/{{j.job_id}}" class="btn btn-o btn-s">View</a>
-  {% if j.status != 'RUNNING' %}
-  <form method="post" action="/api/jobs/{{j.job_id}}/delete" style="margin:0"
-    onsubmit="return confirm('Delete Job #{{j.job_id}} ({{j.group_name}}, {{j.job_date}})?\n\nThis removes all logs and queue data permanently.')">
-    <button class="btn btn-s" style="color:var(--err);border-color:var(--err);background:transparent">Delete</button>
-  </form>
-  {% endif %}
-</td>
-</tr>{% endfor %}</table>
+<td><div class="act-cell">
+<a href="/jobs/{{j.job_id}}" class="btn btn-o btn-s">View</a>
+{% if j.status != 'RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/delete" style="margin:0" onsubmit="return confirm('Delete Job #{{j.job_id}}?\nRemoves all logs and queue data.')"><button class="btn btn-s" style="color:var(--err);border:1px solid var(--err);background:transparent">Del</button></form>{% endif %}
+</div></td>
+</tr>{% endfor %}
+</table></div>
 <div id="noResults" style="display:none" class="empty">No jobs match your search.</div>
-{% else %}<div class="empty">No jobs yet.</div>{% endif %}</div>
+{% else %}<div class="empty">No jobs yet.</div>{% endif %}
+</div>
 <script>
-function filterJobs(q) {
-  q = (q || '').toLowerCase().trim();
-  const st = document.getElementById('statusFilter').value.toLowerCase();
-  const rows = document.querySelectorAll('#jobsTable tbody tr');
-  let visible = 0;
-  rows.forEach(r => {
-    const text = (r.dataset.job + ' ' + r.dataset.group + ' ' + r.dataset.date + ' ' + r.dataset.status).toLowerCase();
-    const matchQ = !q || text.includes(q);
-    const matchSt = !st || r.dataset.status.toLowerCase() === st;
-    const show = matchQ && matchSt;
-    r.style.display = show ? '' : 'none';
-    if (show) visible++;
+function filterJobs(q){
+  q=(q||'').toLowerCase().trim();
+  const st=$('statusFilter').value.toLowerCase();
+  const rows=document.querySelectorAll('#jobsTable tbody tr');
+  let vis=0;
+  rows.forEach(r=>{
+    const txt=(r.dataset.job+' '+r.dataset.group+' '+r.dataset.date+' '+r.dataset.status).toLowerCase();
+    const show=(!q||txt.includes(q))&&(!st||r.dataset.status.toLowerCase()===st);
+    r.style.display=show?'':'none';if(show)vis++;
   });
-  const total = rows.length;
-  document.getElementById('jobCount').textContent = q || st ? `${visible} of ${total} jobs` : `${total} jobs`;
-  document.getElementById('noResults').style.display = visible === 0 && total > 0 ? '' : 'none';
+  $('jobCount').textContent=(q||st)?`${vis} of ${rows.length} jobs`:`${rows.length} jobs`;
+  $('noResults').style.display=vis===0&&rows.length>0?'':'none';
 }
-document.addEventListener('DOMContentLoaded', () => filterJobs(''));
+document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 </script>
 
-{# ═══════════ JOB DETAIL ═══════════ #}
+{# ═══ JOB DETAIL ═══ #}
 {% elif page=='jdetail' %}
-<div class="top"><h2>Job #{{j.job_id}} — {{j.group_name}}</h2>
-<div class="act"><span class="mono" style="color:var(--tx3)">{{j.job_date}}</span>
+<div class="top"><h2>Job #{{j.job_id}} &mdash; {{j.group_name}}</h2>
+<div class="act">
+<span class="mono" style="color:var(--tx3);font-size:11px">{{j.job_date}}</span>
 {% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUNNING</span>{% elif j.status=='KILLED' %}<span class="badge b-err">KILLED</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}
-{% if j.status=='RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/kill" style="display:inline"><button class="btn btn-r" onclick="return confirm('Kill this job? Running macros will complete but no new categories will start.')">Kill Job</button></form>{% endif %}
-{% if j.status != 'RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/delete" style="display:inline" onsubmit="return confirm('Delete Job #{{j.job_id}} permanently?\nThis removes all logs and queue data from the database.')"><button class="btn btn-o btn-s" style="color:var(--err);border-color:var(--err)">Delete Job</button></form>{% endif %}
+{% if j.status=='RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/kill" style="display:inline"><button class="btn btn-r btn-s" onclick="return confirm('Kill this job?')">Kill Job</button></form>{% endif %}
+{% if j.status != 'RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/delete" style="display:inline" onsubmit="return confirm('Delete Job #{{j.job_id}} permanently?')"><button class="btn btn-o btn-s" style="color:var(--err);border-color:var(--err)">Delete Job</button></form>{% endif %}
 </div></div>
 <div class="ct">
 <div class="sg">
@@ -351,98 +457,100 @@ document.addEventListener('DOMContentLoaded', () => filterJobs(''));
 <div class="st"><div class="lb">Completed</div><div class="vl g">{{j.completed_cats}}</div></div>
 <div class="st"><div class="lb">Failed</div><div class="vl r">{{j.failed_cats}}</div></div>
 </div>
-
 <div class="card"><h3>Category Queue</h3>
 <table><tr><th>Category</th><th>Machine</th><th>Status</th><th>Duration</th><th>Error</th></tr>
 {% for q in queue %}<tr>
 <td><span class="tag" style="font-size:12px">{{q.cat_value}}</span></td>
-<td>{{q.machine_name or '-'}}</td>
+<td style="font-size:12px">{{q.machine_name or '-'}}</td>
 <td>{% if q.status=='SUCCESS' %}<span class="badge b-ok">OK</span>{% elif q.status=='RUNNING' %}<span class="badge b-blue pulse">RUN</span>{% elif q.status=='QUEUED' %}<span class="badge b-gray">QUEUED</span>{% elif q.status=='CANCELLED' %}<span class="badge b-warn">CANCEL</span>{% else %}<span class="badge b-err">FAIL</span>{% endif %}</td>
 <td class="mono">{{"%.1f"|format(q.duration_secs)~'s' if q.duration_secs else '-'}}</td>
-<td style="font-size:11px;color:var(--err);max-width:280px">{{q.error_message[:120] if q.error_message else ''}}</td>
+<td style="font-size:11px;color:var(--err);max-width:300px">{{q.error_message[:120] if q.error_message else ''}}</td>
 </tr>{% endfor %}</table></div>
-
 <div class="card"><div class="fx mb" style="justify-content:space-between"><h3 style="margin:0">Execution Log</h3>
 <form method="post" action="/api/logs/clear/{{j.job_id}}" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Clear logs for this job?')">Clear Logs</button></form>
-</div><div style="max-height:350px;overflow-y:auto">
+</div><div style="max-height:380px;overflow-y:auto">
 <table class="lt"><tr><th>Time</th><th>Lvl</th><th>Machine</th><th>Step</th><th>Message</th></tr>
 {% for l in logs %}<tr>
-<td>{{l.created_at[11:] if l.created_at else ''}}</td>
+<td style="white-space:nowrap">{{l.created_at[11:19] if l.created_at else ''}}</td>
 <td class="{{'le' if l.log_level=='ERROR' else 'lw' if l.log_level=='WARN' else 'li'}}">{{l.log_level}}</td>
-<td>{{l.machine_name or ''}}</td><td><span class="tag">{{l.step}}</span></td>
+<td style="white-space:nowrap">{{l.machine_name or ''}}</td>
+<td><span class="tag">{{l.step}}</span></td>
 <td style="{{'color:var(--err)' if l.log_level=='ERROR' else ''}}">{{l.message}}</td>
 </tr>{% endfor %}</table></div></div>
 </div>
 {% if j.status=='RUNNING' %}<script>setTimeout(()=>location.reload(),3000);</script>{% endif %}
 
-{# ═══════════ LOGS ═══════════ #}
+{# ═══ LOGS ═══ #}
 {% elif page=='logs' %}
 <div class="top"><h2>Audit Logs</h2><div class="act">
-<form method="post" action="/api/logs/clear"><button class="btn btn-r btn-s" onclick="return confirm('Delete ALL logs?')">Clear All Logs</button></form>
+<form method="post" action="/api/logs/clear"><button class="btn btn-r btn-s" onclick="return confirm('Delete ALL logs?')">Clear All</button></form>
 </div></div>
-<div class="ct"><div class="card" style="padding:0;overflow:hidden"><div style="max-height:72vh;overflow-y:auto">
+<div class="ct"><div class="card" style="padding:0;overflow:hidden"><div style="max-height:76vh;overflow-y:auto">
 <table class="lt"><tr><th>Time</th><th>Lvl</th><th>Machine</th><th>Job</th><th>Step</th><th>Message</th></tr>
 {% for l in logs %}<tr>
-<td>{{l.created_at}}</td><td class="{{'le' if l.log_level=='ERROR' else 'lw' if l.log_level=='WARN' else 'li'}}">{{l.log_level}}</td>
-<td>{{l.machine_name or ''}}</td><td class="mono">{% if l.job_id %}<a href="/jobs/{{l.job_id}}">#{{l.job_id}}</a>{% endif %}</td>
+<td style="white-space:nowrap">{{l.created_at}}</td>
+<td class="{{'le' if l.log_level=='ERROR' else 'lw' if l.log_level=='WARN' else 'li'}}">{{l.log_level}}</td>
+<td>{{l.machine_name or ''}}</td>
+<td class="mono">{% if l.job_id %}<a href="/jobs/{{l.job_id}}">#{{l.job_id}}</a>{% endif %}</td>
 <td><span class="tag">{{l.step}}</span></td><td>{{l.message}}</td>
 </tr>{% endfor %}</table></div></div></div>
 
-{# ═══════════ EMAILS ═══════════ #}
+{# ═══ EMAILS ═══ #}
 {% elif page=='emails' %}
 <div class="top"><h2>Email Alerts</h2><div class="act">
 <form method="post" action="/api/emails/clear"><button class="btn btn-r btn-s" onclick="return confirm('Delete ALL email logs?')">Clear All</button></form>
 </div></div>
 <div class="ct">
-{% if emails %}<table><tr><th>Time</th><th>Machine</th><th>Subject</th><th>To</th><th>Status</th><th>Error</th></tr>
+{% if emails %}<div class="card" style="padding:0;overflow:hidden">
+<table><tr><th>Time</th><th>Machine</th><th>Subject</th><th>To</th><th>Status</th><th>Error</th></tr>
 {% for e in emails %}<tr>
-<td class="mono" style="font-size:11px">{{e.sent_at}}</td><td>{{e.machine_name}}</td>
-<td style="max-width:280px">{{e.subject[:70]}}</td><td class="mono" style="font-size:10px">{{e.recipients}}</td>
+<td class="mono" style="font-size:11px;white-space:nowrap">{{e.sent_at}}</td><td>{{e.machine_name}}</td>
+<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{e.subject[:70]}}</td>
+<td class="mono" style="font-size:10.5px">{{e.recipients}}</td>
 <td>{% if e.status=='SENT' %}<span class="badge b-ok">SENT</span>{% else %}<span class="badge b-err">FAIL</span>{% endif %}</td>
-<td style="font-size:10px;color:var(--err)">{{e.error or ''}}</td>
-</tr>{% endfor %}</table>{% else %}<div class="empty">No alerts sent.</div>{% endif %}</div>
+<td style="font-size:10.5px;color:var(--err)">{{e.error or ''}}</td>
+</tr>{% endfor %}</table></div>
+{% else %}<div class="empty">No alerts sent.</div>{% endif %}
+</div>
 
-{# ═══════════ SETTINGS ═══════════ #}
+{# ═══ SETTINGS ═══ #}
 {% elif page=='settings' %}
 <div class="top"><h2>Settings</h2></div>
 <div class="ct">
 <form method="post" action="/api/settings">
-
 <div class="card"><h3>Execution Settings</h3>
 <div class="fr">
-<div class="fg" style="max-width:160px"><label>Excel Visible</label><select name="excel_visible">
-<option value="1" {{'selected' if cfg.get('excel_visible','1')=='1'}}>Visible (see Excel open)</option>
+<div class="fg" style="max-width:200px"><label>Excel Visible</label><select name="excel_visible">
+<option value="1" {{'selected' if cfg.get('excel_visible','1')=='1'}}>Visible (watch Excel open)</option>
 <option value="0" {{'selected' if cfg.get('excel_visible')=='0'}}>Hidden (background)</option>
 </select></div>
-<div class="fg" style="max-width:120px"><label>Timeout (sec)</label><input type="text" name="macro_timeout" value="{{cfg.get('macro_timeout','1800')}}"></div>
+<div class="fg" style="max-width:130px"><label>Timeout (sec)</label><input type="text" name="macro_timeout" value="{{cfg.get('macro_timeout','1800')}}"></div>
 <div class="fg"><label>PsExec Path</label><input type="text" name="psexec_path" value="{{cfg.get('psexec_path','psexec')}}" placeholder="psexec or D:\Tools\psexec.exe"></div>
-</div>
-<div style="font-size:11px;color:var(--tx3);margin-top:6px">
-<b>Visible</b>: Excel window opens on remote PC's screen (you can watch it work). Requires user logged in to remote desktop.<br>
-<b>Hidden</b>: runs in background. Faster but you can't see if it's working.
 </div>
 <input type="hidden" name="exec_method" value="auto">
 </div>
-
 <div class="card"><h3>Output Path</h3>
-<div class="fg mb"><label>Compiled Output Directory</label><input type="text" name="compile_path" value="{{cfg.get('compile_path','')}}" placeholder="D:\compiled_output (leave blank for default)"></div>
-<p style="font-size:11px;color:var(--tx3)">Output collected after macro runs. Structure: path/{date}/{group}/{machine}/{category}/</p>
+<div class="fg mb"><label>Compiled Output Directory</label><input type="text" name="compile_path" value="{{cfg.get('compile_path','')}}" placeholder="D:\compiled_output (blank = default)"></div>
+<p style="font-size:11px;color:var(--tx3)">Structure: path/job_{id}/{group}/filename</p>
 </div>
-
 <div class="card"><h3>Email Notifications</h3>
-<div class="fr"><div class="fg" style="max-width:160px"><label>Enable</label><select name="email_enabled">
+<div class="fr">
+<div class="fg" style="max-width:160px"><label>Enable</label><select name="email_enabled">
 <option value="0" {{'selected' if cfg.get('email_enabled','0')=='0'}}>Disabled</option>
 <option value="1" {{'selected' if cfg.get('email_enabled')=='1'}}>Enabled</option>
 </select></div>
-<div class="fg"><label>Recipients (comma-separated)</label><input type="text" name="notify_emails" value="{{cfg.get('notify_emails','')}}" placeholder="admin@co.com, ops@co.com"></div></div>
-</div>
+<div class="fg"><label>Recipients (comma-separated)</label><input type="text" name="notify_emails" value="{{cfg.get('notify_emails','')}}" placeholder="admin@co.com, ops@co.com"></div>
+</div></div>
 <div class="card"><h3>SMTP Configuration</h3>
-<div class="fr"><div class="fg"><label>SMTP Host</label><input type="text" name="smtp_host" value="{{cfg.get('smtp_host','smtp.gmail.com')}}"></div>
-<div class="fg" style="max-width:100px"><label>Port</label><input type="text" name="smtp_port" value="{{cfg.get('smtp_port','587')}}"></div></div>
-<div class="fr"><div class="fg"><label>Username</label><input type="text" name="smtp_username" value="{{cfg.get('smtp_username','')}}"></div>
-<div class="fg"><label>Password</label><input type="password" name="smtp_password" placeholder="Enter to update"></div></div>
+<div class="fr">
+<div class="fg"><label>SMTP Host</label><input type="text" name="smtp_host" value="{{cfg.get('smtp_host','smtp.gmail.com')}}"></div>
+<div class="fg" style="max-width:100px"><label>Port</label><input type="text" name="smtp_port" value="{{cfg.get('smtp_port','587')}}"></div>
+</div>
+<div class="fr">
+<div class="fg"><label>Username</label><input type="text" name="smtp_username" value="{{cfg.get('smtp_username','')}}"></div>
+<div class="fg"><label>Password</label><input type="password" name="smtp_password" placeholder="Enter to update"></div>
+</div>
 <div class="fg mb"><label>From Email</label><input type="text" name="smtp_from" value="{{cfg.get('smtp_from','')}}"></div>
-<p style="font-size:11px;color:var(--tx3);margin-bottom:12px">Gmail: use App Password. Google Account > Security > App Passwords</p>
 </div>
 <div class="fx" style="gap:8px">
 <button type="submit" class="btn btn-p">Save Settings</button>
@@ -455,56 +563,135 @@ document.addEventListener('DOMContentLoaded', () => filterJobs(''));
 
 <script>
 function $(id){return document.getElementById(id)}
-async function testEmail(){
-  const t=$('toast');
-  t.className='toast';t.style.display='block';t.textContent='Sending test email...';t.style.background='var(--blue)';t.style.color='#fff';
-  try{
-    const r=await fetch('/api/settings/test-email',{method:'POST'});
-    const d=await r.json();
-    t.className=d.success?'toast ok':'toast fail';
-    t.textContent=d.success?'Test email sent!':'Failed: '+d.message;
-  }catch(e){t.className='toast fail';t.textContent='Error: '+e.message}
-  setTimeout(()=>{t.style.display='none'},5000);
+
+function toast(msg,type){
+  const t=$('toast');t.className='toast '+(type||'info');t.textContent=msg;t.style.display='block';
+  clearTimeout(t._t);t._t=setTimeout(()=>{t.style.display='none'},6000);
 }
+
 async function editMachine(mid){
   try{
-    const r=await fetch('/api/machines/'+mid);
-    const m=await r.json();
-    $('em_name').value=m.machine_name||'';
-    $('em_sys').value=m.system_name||'';
-    $('em_ip').value=m.ip_address||'';
-    $('em_folder').value=m.shared_folder||'';
-    $('em_remote').value=m.remote_path||'';
-    $('em_user').value=m.username||'';
-    $('em_pass').value='';
-    $('em_dept').value=m.department||'';
-    $('em_loc').value=m.location||'';
+    const r=await fetch('/api/machines/'+mid);const m=await r.json();
+    $('em_name').value=m.machine_name||'';$('em_sys').value=m.system_name||'';
+    $('em_ip').value=m.ip_address||'';$('em_folder').value=m.shared_folder||'';
+    $('em_remote').value=m.remote_path||'';$('em_user').value=m.username||'';
+    $('em_pass').value='';$('em_dept').value=m.department||'';$('em_loc').value=m.location||'';
     $('editMachForm').action='/api/machines/'+mid+'/edit';
     $('editMachMo').classList.add('show');
-  }catch(e){alert('Error loading machine: '+e.message)}
+  }catch(e){toast('Error: '+e.message,'fail')}
 }
+
 async function testMachine(mid,name){
-  const t=$('toast');
-  t.className='toast';t.style.display='block';t.style.background='var(--blue)';t.style.color='#fff';
-  t.textContent='Testing '+name+'...';
+  toast('Testing '+name+'...','info');
   try{
-    const r=await fetch('/api/machines/'+mid+'/test',{method:'POST'});
-    const d=await r.json();
-    let msg=name+': ';
-    let allOk=true;
-    for(const s of d.results){
-      msg+=s.ok?'OK':'FAIL';
-      msg+='('+s.step+') ';
-      if(!s.ok)allOk=false;
-    }
-    t.className=allOk?'toast ok':'toast fail';
-    t.textContent=msg;
-    // Show detailed results
-    let detail=d.results.map(s=>(s.ok?'[OK]':'[FAIL]')+' '+s.step+': '+s.msg).join('\n');
-    setTimeout(()=>alert(detail),500);
-  }catch(e){t.className='toast fail';t.textContent='Error: '+e.message}
-  setTimeout(()=>{t.style.display='none'},8000);
+    const r=await fetch('/api/machines/'+mid+'/test',{method:'POST'});const d=await r.json();
+    const ok=d.results.every(s=>s.ok);
+    toast(name+(ok?' - All OK':' - Issues found'),ok?'ok':'fail');
+    setTimeout(()=>alert('Results for '+name+':\n\n'+d.results.map(s=>(s.ok?'[OK]  ':'[FAIL] ')+s.step+': '+s.msg).join('\n')),200);
+  }catch(e){toast('Error: '+e.message,'fail')}
 }
+
+const _healthDetails={};
+async function checkHealth(mid,name){
+  const badge=$('health_'+mid);if(badge) badge.innerHTML='<span class="badge b-blue pulse">Testing...</span>';
+  toast('Checking '+name+'...','info');
+  try{
+    const r=await fetch('/api/master-machines/'+mid+'/health',{method:'POST'});const d=await r.json();
+    _healthDetails[mid]=d.results;
+    const html=d.status==='OK'?'<span class="badge b-ok">OK</span>':d.status==='PARTIAL'?'<span class="badge b-warn">Partial</span>':'<span class="badge b-err">Fail</span>';
+    if(badge) badge.innerHTML=html;
+    toast(name+' -> '+d.status,d.status==='OK'?'ok':d.status==='PARTIAL'?'info':'fail');
+    const row=document.getElementById('mrow_'+mid);if(row) row.dataset.health=d.status;
+  }catch(e){toast('Error: '+e.message,'fail')}
+}
+
+async function checkAllHealth(){
+  const btn=$('btnCheckAll');if(btn){btn.textContent='Checking...';btn.disabled=true}
+  toast('Checking all machines...','info');
+  try{
+    const r=await fetch('/api/master-machines/health-all',{method:'POST'});const d=await r.json();
+    let ok=0,fail=0;
+    for(const [mid,res] of Object.entries(d)){
+      const badge=$('health_'+mid);
+      if(badge) badge.innerHTML=res.status==='OK'?'<span class="badge b-ok">OK</span>':res.status==='PARTIAL'?'<span class="badge b-warn">Partial</span>':'<span class="badge b-err">Fail</span>';
+      const row=document.getElementById('mrow_'+mid);if(row) row.dataset.health=res.status;
+      if(res.status==='OK')ok++;else fail++;
+    }
+    toast('Done: '+ok+' OK, '+fail+' issues',fail>0?'fail':'ok');
+  }catch(e){toast('Error: '+e.message,'fail')}
+  finally{if(btn){btn.textContent='⚡ Check All';btn.disabled=false}}
+}
+
+function viewDetail(mid,name){
+  $('detailTitle').textContent='Health: '+name;
+  const results=_healthDetails[mid];
+  if(!results||!results.length){$('detailBody').innerHTML='<p style="color:var(--tx3)">No data yet. Click "Test" first.</p>';}
+  else{$('detailBody').innerHTML=results.map(s=>'<div style="padding:6px 0;border-bottom:1px solid var(--bdr);font-size:12.5px;color:'+(s.ok?'var(--ok)':'var(--err)')+'"><strong>'+(s.ok?'OK':'FAIL')+'</strong> &nbsp;'+s.step+': '+s.msg+'</div>').join('');}
+  $('detailMo').classList.add('show');
+}
+
+async function loadEditMaster(mid){
+  try{
+    const r=await fetch('/api/master-machines/'+mid);const m=await r.json();
+    $('em2_name').value=m.machine_name||'';$('em2_sys').value=m.system_name||'';
+    $('em2_ip').value=m.ip_address||'';$('em2_folder').value=m.shared_folder||'';
+    $('em2_remote').value=m.remote_path||'';$('em2_user').value=m.username||'';
+    $('em2_pass').value='';$('em2_dept').value=m.department||'';
+    $('em2_loc').value=m.location||'';$('em2_tags').value=m.tags||'';
+    $('editMasterForm').action='/api/master-machines/'+mid+'/edit';
+    $('editMasterMo').classList.add('show');
+  }catch(e){toast('Error: '+e.message,'fail')}
+}
+
+document.addEventListener('change',function(e){
+  if(e.target.classList.contains('mchk')||e.target.id==='chkAll'){
+    const n=document.querySelectorAll('.mchk:checked').length;
+    const p=$('bulkPanel');if(p) p.style.display=n>0?'block':'none';
+  }
+});
+function toggleAllChecks(m){
+  document.querySelectorAll('.mchk').forEach(c=>c.checked=m.checked);
+  const p=$('bulkPanel');if(p) p.style.display=m.checked?'block':'none';
+}
+function prepareBulk(e){
+  const ids=[...document.querySelectorAll('.mchk:checked')].map(c=>c.value).join(',');
+  if(!ids){e.preventDefault();toast('Select at least one machine','fail');return}
+  $('bulkIds').value=ids;
+  const g=$('bulkGroup');if(!g||!g.value){e.preventDefault();toast('Select a target group','fail');return}
+}
+
+function gatherMasterIds(e){
+  const checked=[...document.querySelectorAll('.masterChk:checked')];
+  if(!checked.length){e.preventDefault();toast('Select at least one machine','fail');return}
+  $('masterIdsHidden').value=checked.map(c=>c.value).join(',');
+}
+
+function filterMachines(q){
+  q=(q||'').toLowerCase().trim();
+  const hf=($('mHealthFilter')||{}).value||'';
+  const rows=document.querySelectorAll('#mTable tbody tr');
+  let vis=0;
+  rows.forEach(r=>{
+    const txt=((r.dataset.name||'')+' '+(r.dataset.sys||'')+' '+(r.dataset.ip||'')+' '+(r.dataset.dept||'')).toLowerCase();
+    const show=(!q||txt.includes(q))&&(!hf||r.dataset.health===hf);
+    r.style.display=show?'':'none';if(show)vis++;
+  });
+  const c=$('mCount');if(c) c.textContent=(q||hf)?vis+' of '+rows.length+' machines':rows.length+' machines';
+  const nr=$('mNoResults');if(nr) nr.style.display=vis===0&&rows.length>0?'':'none';
+}
+
+async function testEmail(){
+  toast('Sending test email...','info');
+  try{
+    const r=await fetch('/api/settings/test-email',{method:'POST'});const d=await r.json();
+    toast(d.success?'Test email sent!':'Failed: '+d.message,d.success?'ok':'fail');
+  }catch(e){toast('Error: '+e.message,'fail')}
+}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  if($('mTable')) filterMachines('');
+  if($('jobsTable')) filterJobs('');
+});
 </script>
 </body>
 </html>

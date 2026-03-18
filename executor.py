@@ -41,12 +41,17 @@ def test_machine(mid):
     m = D.get_machine(mid)
     if not m:
         return [("LOAD", False, "Machine not found")]
+    return test_machine_dict(dict(m))
+
+
+def test_machine_dict(m):
+    """Test a machine dict (works for both group machines and master machines)."""
     results = []
-    shared = m["shared_folder"].strip()
-    hostname = (m["system_name"] or "").strip()
-    username = (m["username"] or "").strip()
-    password = (m["password"] or "").strip()
-    remote_path = (m["remote_path"] or "").strip()
+    shared = (m.get("shared_folder") or "").strip()
+    hostname = (m.get("system_name") or "").strip()
+    username = (m.get("username") or "").strip()
+    password = (m.get("password") or "").strip()
+    remote_path = (m.get("remote_path") or "").strip()
 
     # Block local machine
     if hostname and _is_local(hostname):
@@ -68,7 +73,7 @@ def test_machine(mid):
     if shared.startswith("\\\\") and username and password:
         ok = _net_use_auth(shared, username, password)
         if ok:
-            results.append(("AUTH", True, f"Authenticated to share"))
+            results.append(("AUTH", True, "Authenticated to share"))
         else:
             results.append(("AUTH", False, f"Authentication failed for {shared}. Check username/password."))
             return results
@@ -81,7 +86,7 @@ def test_machine(mid):
         results.append(("ACCESS", False, f"Cannot access {shared}: {e}"))
         return results
 
-    # Test 2: Write/read file
+    # Test 3: Write/read file
     test_file = os.path.join(shared, "_test.txt")
     try:
         with open(test_file, "w") as f:
@@ -93,16 +98,14 @@ def test_machine(mid):
     except Exception as e:
         results.append(("WRITE", False, f"Cannot write: {e}"))
 
-    # Test 3: schtasks (the ONLY execution method)
+    # Test 4: schtasks remote query
     try:
         cmd = ["schtasks", "/query", "/s", hostname, "/u", username,
                "/p", password, "/fo", "list"]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if r.returncode == 0:
-            results.append(("SCHTASKS", True,
-                f"schtasks works on {hostname}"))
-            results.append(("READY", True,
-                f"Macro will run on {hostname} at {remote_path}"))
+            results.append(("SCHTASKS", True, f"schtasks works on {hostname}"))
+            results.append(("READY", True, f"Macro will run on {hostname} at {remote_path}"))
         else:
             err = (r.stderr.strip() or r.stdout.strip())[:120]
             results.append(("SCHTASKS", False,
@@ -111,6 +114,7 @@ def test_machine(mid):
         results.append(("SCHTASKS", False, f"schtasks error: {e}"))
 
     return results
+
 
 
 # =====================================================================
