@@ -127,7 +127,7 @@ def _run_job(jid):
         excel_file = job["excel_file_name"]
         macro_name = job["macro_name"]
         target_cell = job["target_cell"] or "A1"
-        today = datetime.now().strftime("%Y-%m-%d")
+        job_folder = f"job_{jid}"
         compile_dir = D.get_setting("compile_path", "") or COMPILED_DIR
 
         files = D.get_files(gid)
@@ -164,7 +164,7 @@ def _run_job(jid):
         # == PHASE 1: Prep machines (auth + copy files) ==
         machine_ready = {}  # mid -> unc_folder
         with ThreadPoolExecutor(max_workers=min(len(machines), 8)) as pool:
-            futs = {pool.submit(_prep_machine, m, today, files, jid): m for m in machines}
+            futs = {pool.submit(_prep_machine, m, job_folder, files, jid): m for m in machines}
             for fut in as_completed(futs):
                 m = futs[fut]
                 try:
@@ -224,7 +224,7 @@ def _run_job(jid):
                         f.write(vbs_code)
 
                     # Build LOCAL path for schtasks (runs on remote PC)
-                    local_vbs = os.path.join(remote_path, today, vbs_name)
+                    local_vbs = os.path.join(remote_path, job_folder, vbs_name)
                     D.add_log(jid, qid, mid, "INFO", "VBS_READY",
                               f"Remote: {local_vbs}")
 
@@ -261,7 +261,7 @@ def _run_job(jid):
 
                     # Collect output — only pending/new files since snapshot
                     new_files = _collect_output(unc_folder, files, compile_dir,
-                                                today, group_name, mname, cat,
+                                                job_folder, group_name, mname, cat,
                                                 jid, qid, mid, pre_snapshot)
 
                     elapsed = (datetime.now() - start).total_seconds()
@@ -347,7 +347,7 @@ def _run_job(jid):
 #  PREP MACHINE: auth + copy + map drive
 # =====================================================================
 
-def _prep_machine(machine, today, files, jid):
+def _prep_machine(machine, job_folder, files, jid):
     shared = machine["shared_folder"].strip()
     hostname = (machine["system_name"] or "").strip()
     username = (machine["username"] or "").strip()
@@ -355,7 +355,7 @@ def _prep_machine(machine, today, files, jid):
     remote_path = (machine["remote_path"] or "").strip()
     mid = machine["machine_id"]
     mname = machine["machine_name"]
-    unc_folder = os.path.join(shared, today)
+    unc_folder = os.path.join(shared, job_folder)
 
     # BLOCK: Server cannot run macros on itself
     if _is_local(hostname):
@@ -765,7 +765,7 @@ def _snapshot_folder(folder):
     return snap
 
 
-def _collect_output(unc_folder, files, compile_dir, today, group_name,
+def _collect_output(unc_folder, files, compile_dir, job_folder, group_name,
                     mname, cat, jid, qid, mid, pre_snapshot=None):
     """
     Collect only PENDING/NEW output files:
@@ -809,7 +809,7 @@ def _collect_output(unc_folder, files, compile_dir, today, group_name,
                   f"{mname}: no new/modified output files for '{cat}' (all already copied or none produced)")
         return []
 
-    out = os.path.join(compile_dir, today, group_name)
+    out = os.path.join(compile_dir, job_folder, group_name)
     os.makedirs(out, exist_ok=True)
 
     copied = []
@@ -839,10 +839,10 @@ def _track(jid):
     job = D.get_job(jid)
     if not job:
         return
-    today = datetime.now().strftime("%Y-%m-%d")
+    job_folder = f"job_{jid}"
     gn = job["group_name"]
     base = D.get_setting("compile_path", "") or COMPILED_DIR
-    root = os.path.join(base, today, gn)
+    root = os.path.join(base, job_folder, gn)
     try:
         os.makedirs(root, exist_ok=True)
         tp = os.path.join(root, f"TRACKER_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
@@ -852,16 +852,16 @@ def _track(jid):
             if d.get("output_files"):
                 try:
                     for fn in json.loads(d["output_files"]):
-                        rows.append({"job_id": jid, "date": today, "group": gn,
+                        rows.append({"job_id": jid, "job_folder": job_folder, "group": gn,
                                      "machine": d.get("machine_name") or "?",
                                      "category": d["cat_value"], "filename": fn})
                 except:
                     pass
         with open(tp, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=["job_id", "date", "group", "machine", "category", "filename"])
+            w = csv.DictWriter(f, fieldnames=["job_id", "job_folder", "group", "machine", "category", "filename"])
             w.writeheader()
             w.writerows(rows)
         D.add_log(jid, level="INFO", step="TRACKER",
-                  message=f"{os.path.basename(tp)} ({len(rows)} files)")
+                  message=f"{os.path.basename(tp)} ({len(rows)} files) -> {root}")
     except Exception as e:
         D.add_log(jid, level="WARN", step="TRACKER", message=f"Failed: {e}")
