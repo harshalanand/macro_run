@@ -257,6 +257,11 @@ def update_master_machine(mid, **kw):
 
 def delete_master_machine(mid):
     with db() as c:
+        # Also remove from any group it's assigned to
+        m = c.execute("SELECT machine_name, assigned_group_id FROM machine_master WHERE master_id=?", (mid,)).fetchone()
+        if m and m["assigned_group_id"]:
+            c.execute("DELETE FROM machines WHERE machine_name=? AND group_id=?",
+                      (m["machine_name"], m["assigned_group_id"]))
         c.execute("DELETE FROM machine_master WHERE master_id=?", (mid,))
 
 def update_master_health(mid, status, detail=""):
@@ -343,14 +348,17 @@ def update_group(gid, **kw):
 
 def delete_group(gid):
     with db() as c:
-        # clean up files on disk
+        # 0. Untag all master machines assigned to this group
+        c.execute("UPDATE machine_master SET assigned_group_id=NULL WHERE assigned_group_id=?", (gid,))
+
+        # 1. Clean up uploaded files from disk
         for r in c.execute("SELECT stored_path FROM group_files WHERE group_id=?", (gid,)).fetchall():
             try:
                 if r["stored_path"] and os.path.exists(r["stored_path"]):
                     os.remove(r["stored_path"])
             except: pass
 
-        # 1. Get job IDs first
+        # 2. Delete job queue + logs for all jobs in this group
         jids = [r["job_id"] for r in c.execute("SELECT job_id FROM jobs WHERE group_id=?", (gid,)).fetchall()]
         if jids:
             ph = ",".join("?" * len(jids))
@@ -359,17 +367,17 @@ def delete_group(gid):
             c.execute(f"DELETE FROM email_log WHERE job_id IN ({ph})", jids)
         c.execute("DELETE FROM jobs WHERE group_id=?", (gid,))
 
-        # 2. Now safe to delete categories (no FK refs from job_queue)
+        # 3. Categories
         c.execute("DELETE FROM categories WHERE group_id=?", (gid,))
 
-        # 3. Machines
+        # 4. Machines (nullify FK refs first to avoid constraint issues)
         c.execute("UPDATE job_queue SET machine_id=NULL WHERE machine_id IN (SELECT machine_id FROM machines WHERE group_id=?)", (gid,))
         c.execute("DELETE FROM machines WHERE group_id=?", (gid,))
 
-        # 4. Files
+        # 5. Files
         c.execute("DELETE FROM group_files WHERE group_id=?", (gid,))
 
-        # 5. Group
+        # 6. Group itself
         c.execute("DELETE FROM machine_groups WHERE group_id=?", (gid,))
 
 # ── MACHINES ────────────────────────────────────────────

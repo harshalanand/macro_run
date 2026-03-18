@@ -207,10 +207,6 @@ async def add_from_master(gid: int, master_ids: str = Form(...)):
             added += 1
     return RedirectResponse(f"/groups/{gid}", 303)
 
-
-async def groups_page(r: Request):
-    return tpl.TemplateResponse("app.html", {"request": r, "page": "groups", "groups": D.get_groups()})
-
 @app.get("/groups", response_class=HTMLResponse)
 async def groups_page(r: Request):
     return tpl.TemplateResponse("app.html", {"request": r, "page": "groups", "groups": D.get_groups()})
@@ -292,12 +288,13 @@ async def add_machine(gid: int, machine_name:str=Form(...), system_name:str=Form
 
 @app.post("/api/groups/{gid}/untag-machines")
 async def bulk_untag_machines(gid: int, machine_ids: str = Form(...)):
-    if E.is_running.__module__ and D.group_has_active_job(gid):
+    if D.group_has_active_job(gid):
         raise HTTPException(400, "Cannot untag machines while a job is running. Kill the job first.")
     ids = [int(x.strip()) for x in machine_ids.split(",") if x.strip().isdigit()]
     D.bulk_untag_machines(ids)
     return RedirectResponse(f"/groups/{gid}", 303)
 
+@app.post("/api/machines/{mid}/delete")
 async def del_machine(mid: int):
     m = D.get_machine(mid)
     D.delete_machine(mid)
