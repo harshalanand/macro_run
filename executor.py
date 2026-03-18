@@ -617,106 +617,105 @@ def _get_active_session_user(hostname, admin_username, admin_password, jid=None,
 
 def _run_via_schtasks(vbs_local_path, hostname, username, password,
                       task_name, jid, qid, mid, mname, interactive=True):
-    """Create + run scheduled task. Handles local and remote machines.
+    """Create + run scheduled task on the remote machine.
 
-    Key logic for user resolution:
-      1. Query the remote machine for the ACTIVE logged-in session user.
-      2. If a different user is detected (e.g. vishnu.kumar vs configured
-         administrator), run the task AS that detected user:
-           - /ru <detected_user>  (no /rp — Windows allows this for /it
-             tasks when the user already has an active interactive session)
-      3. If detection fails or no session exists, fall back to the
-         configured username + password.
-      4. If /it create fails for any reason, retry without /it (headless).
-      5. If headless also fails, last resort: run as SYSTEM (no /ru /rp).
+    User resolution strategy:
+      - ALWAYS try to detect the ACTIVE logged-in user via 'query user'.
+      - Run the task AS that active user (/ru <user>, NO /rp — not needed
+        when the user has an active interactive session on the machine).
+      - The configured admin credentials (/u /p) are used ONLY to
+        authenticate the schtasks command to the remote machine — they
+        are NOT used as the run-as user unless no session is detected.
+
+    Fallback chain if no active session is detected:
+      1. Configured user + /it        (admin is the logged-in user)
+      2. Configured user, no /it      (headless, admin not logged in)
+      ERROR — do NOT fall back to SYSTEM (macro needs Excel/UI).
+
+    Fallback chain if active session IS detected:
+      1. Detected user + /it          (normal — user has desktop session)
+      2. Detected user, no /it        (session exists but /it rejected)
     """
     task_cmd = f'cscript //NoLogo "{vbs_local_path}"'
     local = _is_local(hostname)
 
-    # Strip domain prefix from configured username for /ru
-    # .\administrator -> administrator
-    # DOMAIN\administrator -> administrator
+    # Strip domain prefix from configured admin username (used to CONNECT, not run-as)
     configured_ru = username
     if "\\" in configured_ru:
         configured_ru = configured_ru.split("\\", 1)[1]
 
-    # --- Detect who is ACTUALLY logged into the remote machine ---
-    ru_user = configured_ru      # default: use configured user
-    ru_password = password       # default: use configured password
-    user_was_detected = False
+    mode = "LOCAL" if local else "REMOTE"
+
+    # ── Step 1: Detect the active session user on the remote machine ──
+    ru_user = None
+    use_password = False      # active session user needs no /rp
 
     if not local:
         detected = _get_active_session_user(hostname, username, password, jid, qid, mid)
         if detected:
-            # Normalise: strip any domain prefix from detected user too
-            plain_detected = detected.split("\\")[-1].strip()
-            if plain_detected.lower() != configured_ru.lower():
-                # Logged-in user differs from configured admin — run AS detected user.
-                # Do NOT pass /rp: Windows schtasks /it does not require the password
-                # when the user already has an active interactive session.
-                D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                          f"{hostname}: configured user='{configured_ru}' but logged-in user='{plain_detected}' "
-                          f"— will run task as '{plain_detected}' (no password needed for active session)")
-                ru_user = plain_detected
-                ru_password = None          # intentionally omit /rp for detected user
-                user_was_detected = True
-            else:
-                D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                          f"{hostname}: logged-in user matches configured user '{configured_ru}'")
-        else:
+            ru_user = detected.split("\\")[-1].strip()   # strip domain prefix
+            use_password = False   # /it with active session = no password needed
             D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                      f"No active session detected on {hostname} — running as configured user '{configured_ru}'")
+                      f"{hostname}: active session user = '{ru_user}' "
+                      f"{'(same as configured)' if ru_user.lower() == configured_ru.lower() else f'(configured={configured_ru})'} "
+                      f"— task will run AS '{ru_user}'")
+        else:
+            # No active session detected — fall back to configured admin
+            ru_user = configured_ru
+            use_password = True
+            D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
+                      f"{hostname}: no active session detected — falling back to configured user '{ru_user}'. "
+                      f"Macro may not interact with Excel unless someone is logged in.")
+    else:
+        # Local: run as configured user
+        ru_user = configured_ru
+        use_password = True
 
-    def _build_create(run_as_user, run_as_password, with_interactive):
-        """Build the schtasks /create command list."""
+    def _build_create(with_interactive, with_password):
         cmd = ["schtasks", "/create"]
         if not local:
+            # /u /p = admin credentials to AUTHENTICATE the command to remote machine
             cmd += ["/s", hostname, "/u", username, "/p", password]
         cmd += ["/tn", task_name, "/tr", task_cmd,
                 "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"]
-        if run_as_user:
-            cmd += ["/ru", run_as_user]
-        if run_as_password:
-            cmd += ["/rp", run_as_password]
+        # /ru = which user's session the task RUNS IN on the target machine
+        cmd += ["/ru", ru_user]
+        if with_password:
+            cmd += ["/rp", password]
         if with_interactive:
             cmd.append("/it")
         return cmd
 
-    mode = "LOCAL" if local else "REMOTE"
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-              f"Creating task on {hostname} ({mode}) — ru='{ru_user}' "
-              f"{'(detected session user, no /rp)' if user_was_detected else '(configured user)'}")
+              f"Scheduling task on {hostname} ({mode}) ru='{ru_user}'")
 
-    # Attempt order:
-    #  1. Primary:  ru_user + ru_password + /it
-    #  2. Fallback: ru_user + ru_password (no /it, headless)
-    #  3. Last resort: SYSTEM (no /ru /rp, no /it) — macro runs hidden
+    # ── Step 2: Try creating the task (with /it first, then without) ──
     attempts = [
-        (ru_user,  ru_password,  interactive,  "primary"),
-        (ru_user,  ru_password,  False,         "headless (no /it)"),
-        (None,     None,         False,         "SYSTEM fallback"),
+        (True,  use_password, "interactive /it"),
+        (False, use_password, "headless (no /it)"),
     ]
 
     task_created = False
-    for a_user, a_pass, a_it, a_label in attempts:
-        create = _build_create(a_user, a_pass, a_it)
+    for with_it, with_pw, label in attempts:
+        create = _build_create(with_interactive=with_it, with_password=with_pw)
         r = subprocess.run(create, capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
             D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                      f"Task created [{a_label}] on {hostname}")
+                      f"Task created [{label}] on {hostname}")
             task_created = True
             break
         err = (r.stderr.strip() or r.stdout.strip())[:200]
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                  f"Create [{a_label}] failed: {err}")
+                  f"Create [{label}] failed: {err}")
 
     if not task_created:
-        D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                  f"All create attempts failed on {hostname} — cannot run task")
+        D.add_log(jid, qid, mid, "ERROR", "SCHTASKS",
+                  f"{hostname}: could not create task as '{ru_user}'. "
+                  f"Ensure the machine has an active user session and admin credentials are correct.")
         return False
 
+    # ── Step 3: Trigger the task ──
     try:
-        # BUILD RUN COMMAND — always uses admin credentials to TRIGGER the task
         run_cmd = ["schtasks", "/run"]
         if not local:
             run_cmd += ["/s", hostname, "/u", username, "/p", password]
@@ -725,15 +724,16 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
         r2 = subprocess.run(run_cmd, capture_output=True, text=True, timeout=15)
         if r2.returncode != 0:
             err = (r2.stderr.strip() or r2.stdout.strip())[:200]
-            D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Run failed: {err}")
+            D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Trigger failed: {err}")
             return False
 
         D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                  f"Task running on {hostname} ({mode}) as '{ru_user}'")
+                  f"Task triggered on {hostname} — running as '{ru_user}'")
         return True
     except Exception as e:
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Error triggering task: {e}")
         return False
+
 
 
 
@@ -789,16 +789,19 @@ def _snapshot_folder(folder):
 def _collect_output(unc_folder, files, compile_dir, job_folder, group_name,
                     mname, cat, jid, qid, mid, pre_snapshot=None):
     """
-    Collect only PENDING/NEW output files:
-      - Files that did NOT exist before the macro ran (not in pre_snapshot), OR
-      - Files that existed but were MODIFIED after the macro ran (mtime changed),
-        including original files that the macro may have saved back.
-    Skips temp VBS/result/lock files.
+    Collect only NEW output files produced by the macro:
+      - Must NOT be in pre_snapshot (brand-new file after macro ran)
+      - OR existed before but was MODIFIED (mtime increased > 1s)
+      - ALWAYS skip original/uploaded files — they are input templates,
+        never output, even if the macro saved back into them.
+      - ALWAYS skip temp VBS/result/lock files.
+      - Output filenames are kept exactly as produced — NO category prefix.
     """
     if pre_snapshot is None:
         pre_snapshot = {}
 
-    original = {f["original_name"] for f in files}
+    # Build set of original filenames (case-insensitive for Windows shares)
+    original_lower = {f["original_name"].lower() for f in files}
     skip_prefixes = ("_run_", "_result_", "_macro_", "~$")
     found = []
 
@@ -807,19 +810,23 @@ def _collect_output(unc_folder, files, compile_dir, job_folder, group_name,
             fp = os.path.join(unc_folder, fn)
             if not os.path.isfile(fp):
                 continue
+            # Always skip temp files
             if any(fn.startswith(s) for s in skip_prefixes):
+                continue
+            # Always skip original/uploaded files — never treat them as output
+            if fn.lower() in original_lower:
                 continue
 
             cur_mtime = os.path.getmtime(fp)
             prev_mtime = pre_snapshot.get(fn)
 
             if prev_mtime is None:
-                # Brand-new file produced by macro → always collect
+                # Brand-new file produced by macro → collect
                 found.append(fn)
             elif cur_mtime > prev_mtime + 1:
-                # File existed but was MODIFIED (incl. originals saved by macro)
+                # Existed before but modified by macro → collect
                 found.append(fn)
-            # else: unchanged file — skip (already collected in a prior cat run)
+            # else: unchanged → skip
 
     except Exception as e:
         D.add_log(jid, qid, mid, "WARN", "COLLECT", f"Cannot list folder: {e}")
@@ -827,7 +834,7 @@ def _collect_output(unc_folder, files, compile_dir, job_folder, group_name,
 
     if not found:
         D.add_log(jid, qid, mid, "INFO", "COLLECT",
-                  f"{mname}: no new/modified output files for '{cat}' (all already copied or none produced)")
+                  f"{mname}: no new output files for '{cat}'")
         return []
 
     out = os.path.join(compile_dir, job_folder, group_name)
@@ -836,12 +843,15 @@ def _collect_output(unc_folder, files, compile_dir, job_folder, group_name,
     copied = []
     for fn in found:
         try:
-            safe_cat = cat.replace("/", "_").replace("\\", "_").replace(" ", "_")
-            # Avoid double-prefix if fn already starts with safe_cat
-            out_name = fn if fn.startswith(safe_cat + "_") else f"{safe_cat}_{fn}"
             src = os.path.join(unc_folder, fn)
-            dst = os.path.join(out, out_name)
+            dst = os.path.join(out, fn)          # keep original filename, no prefix
+            # If same filename from different cat already exists, append cat suffix
+            if os.path.exists(dst):
+                name, ext = os.path.splitext(fn)
+                safe_cat = cat.replace("/", "_").replace("\\", "_").replace(" ", "_")
+                dst = os.path.join(out, f"{name}_{safe_cat}{ext}")
             shutil.copy2(src, dst)
+            out_name = os.path.basename(dst)
             sz = os.path.getsize(dst) / 1024
             D.add_log(jid, qid, mid, "INFO", "OUTPUT",
                       f"Copied: {out_name} ({sz:.1f}KB) -> {out}")
