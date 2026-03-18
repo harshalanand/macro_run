@@ -388,7 +388,24 @@ def get_machine(mid):
 
 def delete_machine(mid):
     with db() as c:
+        m = c.execute("SELECT machine_name, group_id FROM machines WHERE machine_id=?", (mid,)).fetchone()
         c.execute("DELETE FROM machines WHERE machine_id=?", (mid,))
+        # Untag the master record so it becomes available again
+        if m:
+            c.execute("""UPDATE machine_master SET assigned_group_id=NULL
+                         WHERE machine_name=? AND assigned_group_id=?""",
+                      (m["machine_name"], m["group_id"]))
+
+def group_has_active_job(gid):
+    """Return True if any job for this group is currently RUNNING."""
+    with db() as c:
+        r = c.execute("SELECT COUNT(*) c FROM jobs WHERE group_id=? AND status='RUNNING'", (gid,)).fetchone()
+        return (r["c"] or 0) > 0
+
+def untag_master_from_group(master_id):
+    """Remove group assignment from a master machine (makes it available again)."""
+    with db() as c:
+        c.execute("UPDATE machine_master SET assigned_group_id=NULL WHERE master_id=?", (master_id,))
 
 def toggle_machine(mid):
     with db() as c:

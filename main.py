@@ -146,6 +146,16 @@ async def toggle_master_machine(mid: int):
         D.update_master_machine(mid, is_active=0 if m["is_active"] else 1)
     return RedirectResponse("/machines", 303)
 
+@app.post("/api/master-machines/{mid}/untag")
+async def untag_master_machine(mid: int):
+    m = D.get_master_machine(mid)
+    if not m:
+        raise HTTPException(404)
+    if m["assigned_group_id"] and D.group_has_active_job(m["assigned_group_id"]):
+        return JSONResponse({"error": f"Group '{m['assigned_group_name']}' has an active running job. Kill the job first before untagging."}, status_code=400)
+    D.untag_master_from_group(mid)
+    return RedirectResponse("/machines", 303)
+
 @app.post("/api/master-machines/{mid}/health")
 async def check_master_health(mid: int):
     m = D.get_master_machine(mid)

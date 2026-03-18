@@ -204,7 +204,11 @@ textarea{resize:vertical;min-height:60px}
 <button class="btn btn-o btn-s" onclick="checkHealth({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
 <button class="btn btn-o btn-s" onclick="viewDetail({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Detail</button>
 <button class="btn btn-o btn-s" onclick="loadEditMaster({{m.master_id}})">Edit</button>
+{% if m.assigned_group_id %}
+<button class="btn btn-o btn-s" style="color:var(--warn);border-color:var(--warn)" onclick="untagMachine({{m.master_id}},'{{m.machine_name|replace("'","\\'")|replace('"','\\"')}}','{{(m.assigned_group_name or '')|replace("'","\\'")|replace('"','\\\"')}}')">Untag</button>
+{% else %}
 <form method="post" action="/api/master-machines/{{m.master_id}}/toggle" style="margin:0"><button class="btn btn-o btn-s">{{'Off' if m.is_active else 'On'}}</button></form>
+{% endif %}
 <form method="post" action="/api/master-machines/{{m.master_id}}/delete" style="margin:0" onsubmit="return confirm('Delete {{m.machine_name}}?')"><button class="btn btn-s" style="color:var(--err);border:1px solid var(--err);background:transparent">Del</button></form>
 </div></td>
 </tr>{% endfor %}
@@ -744,6 +748,20 @@ function filterMachines(q){
   });
   const c=$('mCount');if(c) c.textContent=(q||hf)?vis+' of '+rows.length+' machines':rows.length+' machines';
   const nr=$('mNoResults');if(nr) nr.style.display=vis===0&&rows.length>0?'':'none';
+}
+
+async function untagMachine(mid, name, groupName){
+  if(!confirm('Untag '+name+' from group "'+groupName+'"?\n\nThe machine will stay in the group but become available to reassign. No running job must exist for that group.')) return;
+  try{
+    const r=await fetch('/api/master-machines/'+mid+'/untag',{method:'POST'});
+    if(r.redirected || r.ok){
+      toast(name+' untagged from '+groupName,'ok');
+      setTimeout(()=>location.reload(),800);
+    } else {
+      const d=await r.json().catch(()=>({}));
+      toast((d.error||'Untag failed'),'fail');
+    }
+  }catch(e){toast('Error: '+e.message,'fail')}
 }
 
 async function testEmail(){
