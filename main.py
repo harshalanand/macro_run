@@ -269,6 +269,13 @@ async def kill_job(jid: int):
         D.kill_job_db(jid)
     return RedirectResponse(f"/jobs/{jid}", 303)
 
+@app.post("/api/jobs/{jid}/delete")
+async def delete_job(jid: int):
+    if E.is_running(jid):
+        raise HTTPException(400, "Cannot delete a running job. Kill it first.")
+    D.delete_job(jid)
+    return RedirectResponse("/jobs", 303)
+
 # ── SETTINGS ────────────────────────────────────────────────────────────────
 
 @app.post("/api/settings")

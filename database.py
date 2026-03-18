@@ -487,6 +487,14 @@ def kill_job_db(jid):
         c.execute("UPDATE job_queue SET status='CANCELLED' WHERE job_id=? AND status='QUEUED'", (jid,))
         c.execute("UPDATE jobs SET status='KILLED',finished_at=? WHERE job_id=? AND status='RUNNING'",
                   (datetime.now().isoformat(), jid))
+
+def delete_job(jid):
+    """Permanently delete a job and all its queue items and logs from DB."""
+    with db() as c:
+        c.execute("DELETE FROM run_logs WHERE job_id=?", (jid,))
+        c.execute("DELETE FROM email_log WHERE job_id=?", (jid,))
+        c.execute("DELETE FROM job_queue WHERE job_id=?", (jid,))
+        c.execute("DELETE FROM jobs WHERE job_id=?", (jid,))
 # ── DASHBOARD ───────────────────────────────────────────
 def get_dashboard():
     with db() as c:

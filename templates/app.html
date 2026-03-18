@@ -281,15 +281,61 @@ textarea{resize:vertical;min-height:60px}
 {% elif page=='jobs' %}
 <div class="top"><h2>All Jobs</h2></div>
 <div class="ct">
-{% if jobs %}<table><tr><th>Job</th><th>Group</th><th>Date</th><th>Status</th><th>Cats</th><th>OK</th><th>Fail</th><th>Trigger</th><th></th></tr>
-{% for j in jobs %}<tr>
+<div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+  <input id="jobSearch" type="text" placeholder="🔍  Search by job #, group, date, status…"
+    style="flex:1;min-width:220px;padding:8px 12px;border:1px solid var(--bdr);border-radius:6px;
+           background:var(--bg2);color:var(--fg);font-size:13px;outline:none"
+    oninput="filterJobs(this.value)">
+  <select id="statusFilter" onchange="filterJobs(document.getElementById('jobSearch').value)"
+    style="padding:8px 12px;border:1px solid var(--bdr);border-radius:6px;
+           background:var(--bg2);color:var(--fg);font-size:13px">
+    <option value="">All Statuses</option>
+    <option value="DONE">Done</option>
+    <option value="RUNNING">Running</option>
+    <option value="PARTIAL">Partial</option>
+    <option value="KILLED">Killed</option>
+  </select>
+  <span id="jobCount" style="color:var(--fg2);font-size:12px;white-space:nowrap"></span>
+</div>
+{% if jobs %}<table id="jobsTable"><tr><th>Job</th><th>Group</th><th>Date</th><th>Status</th><th>Cats</th><th>OK</th><th>Fail</th><th>Trigger</th><th></th></tr>
+{% for j in jobs %}<tr data-job="#{{j.job_id}}" data-group="{{j.group_name|lower}}" data-date="{{j.job_date}}"
+  data-status="{% if j.status=='COMPLETED' %}DONE{% elif j.status=='RUNNING' %}RUNNING{% elif 'ERROR' in j.status %}PARTIAL{% else %}{{j.status}}{% endif %}">
 <td class="mono">#{{j.job_id}}</td><td>{{j.group_name}}</td><td class="mono">{{j.job_date}}</td>
 <td>{% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUN</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}</td>
 <td class="mono">{{j.total_cats}}</td><td style="color:var(--ok)">{{j.completed_cats}}</td><td style="color:var(--err)">{{j.failed_cats}}</td>
 <td><span class="tag">{{j.triggered_by}}</span></td>
-<td><a href="/jobs/{{j.job_id}}" class="btn btn-o btn-s">View</a></td>
+<td style="display:flex;gap:6px;align-items:center">
+  <a href="/jobs/{{j.job_id}}" class="btn btn-o btn-s">View</a>
+  {% if j.status != 'RUNNING' %}
+  <form method="post" action="/api/jobs/{{j.job_id}}/delete" style="margin:0"
+    onsubmit="return confirm('Delete Job #{{j.job_id}} ({{j.group_name}}, {{j.job_date}})?\n\nThis removes all logs and queue data permanently.')">
+    <button class="btn btn-s" style="color:var(--err);border-color:var(--err);background:transparent">Delete</button>
+  </form>
+  {% endif %}
+</td>
 </tr>{% endfor %}</table>
+<div id="noResults" style="display:none" class="empty">No jobs match your search.</div>
 {% else %}<div class="empty">No jobs yet.</div>{% endif %}</div>
+<script>
+function filterJobs(q) {
+  q = (q || '').toLowerCase().trim();
+  const st = document.getElementById('statusFilter').value.toLowerCase();
+  const rows = document.querySelectorAll('#jobsTable tbody tr');
+  let visible = 0;
+  rows.forEach(r => {
+    const text = (r.dataset.job + ' ' + r.dataset.group + ' ' + r.dataset.date + ' ' + r.dataset.status).toLowerCase();
+    const matchQ = !q || text.includes(q);
+    const matchSt = !st || r.dataset.status.toLowerCase() === st;
+    const show = matchQ && matchSt;
+    r.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  const total = rows.length;
+  document.getElementById('jobCount').textContent = q || st ? `${visible} of ${total} jobs` : `${total} jobs`;
+  document.getElementById('noResults').style.display = visible === 0 && total > 0 ? '' : 'none';
+}
+document.addEventListener('DOMContentLoaded', () => filterJobs(''));
+</script>
 
 {# ═══════════ JOB DETAIL ═══════════ #}
 {% elif page=='jdetail' %}
@@ -297,6 +343,7 @@ textarea{resize:vertical;min-height:60px}
 <div class="act"><span class="mono" style="color:var(--tx3)">{{j.job_date}}</span>
 {% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUNNING</span>{% elif j.status=='KILLED' %}<span class="badge b-err">KILLED</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}
 {% if j.status=='RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/kill" style="display:inline"><button class="btn btn-r" onclick="return confirm('Kill this job? Running macros will complete but no new categories will start.')">Kill Job</button></form>{% endif %}
+{% if j.status != 'RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/delete" style="display:inline" onsubmit="return confirm('Delete Job #{{j.job_id}} permanently?\nThis removes all logs and queue data from the database.')"><button class="btn btn-o btn-s" style="color:var(--err);border-color:var(--err)">Delete Job</button></form>{% endif %}
 </div></div>
 <div class="ct">
 <div class="sg">
