@@ -164,54 +164,93 @@ textarea{resize:vertical;min-height:60px}
 </div>
 {% if machines %}
 <div class="card" style="padding:0;overflow:hidden;overflow-x:auto">
-<table id="mTable">
+<table id="mTable" style="table-layout:fixed;width:100%">
+<colgroup>
+  <col style="width:36px">
+  <col style="width:120px">
+  <col style="width:130px">
+  <col style="width:170px">
+  <col style="width:130px">
+  <col style="width:140px">
+  <col style="width:90px">
+  <col style="width:100px">
+  <col style="width:80px">
+  <col style="width:150px">
+  <col style="width:220px">
+</colgroup>
+<thead>
 <tr>
-<th style="width:30px"><input type="checkbox" id="chkAll" onclick="toggleAllChecks(this)" title="Select all"></th>
-<th>Machine</th><th>System / IP</th><th>Shared Folder (UNC)</th><th>Remote Path</th>
-<th>Username</th><th>Group</th><th>Tags</th><th>Health</th><th>Issue / Last Check</th><th>Actions</th>
+<th><input type="checkbox" id="chkAll" onclick="toggleAllChecks(this)" title="Select all"></th>
+<th>Machine</th>
+<th>System / IP</th>
+<th>Shared Folder (UNC)</th>
+<th>Remote Path</th>
+<th>Username</th>
+<th>Group</th>
+<th>Tags</th>
+<th>Health</th>
+<th>Issue / Last Check</th>
+<th>Actions</th>
 </tr>
-{% for m in machines %}<tr id="mrow_{{m.master_id}}" data-name="{{m.machine_name|lower}}" data-sys="{{(m.system_name or '')|lower}}" data-ip="{{(m.ip_address or '')|lower}}" data-dept="{{(m.department or '')|lower}}" data-health="{{m.health_status or 'UNKNOWN'}}" style="{% if not m.is_active %}opacity:.4{% endif %}">
-<td><input type="checkbox" class="mchk" value="{{m.master_id}}" {% if m.assigned_group_id %}disabled title="Already in a group"{% endif %}></td>
-<td style="font-weight:600;min-width:110px">
-  {{m.machine_name}}
-  {% if m.department %}<br><span style="font-size:10px;color:var(--tx3)">{{m.department}}</span>{% endif %}
+</thead>
+<tbody>
+{% for m in machines %}
+<tr id="mrow_{{m.master_id}}"
+    data-name="{{m.machine_name|lower}}"
+    data-sys="{{(m.system_name or '')|lower}}"
+    data-ip="{{(m.ip_address or '')|lower}}"
+    data-dept="{{(m.department or '')|lower}}"
+    data-health="{{m.health_status or 'UNKNOWN'}}"
+    style="{% if not m.is_active %}opacity:.4{% endif %}">
+<td style="text-align:center"><input type="checkbox" class="mchk" value="{{m.master_id}}" {% if m.assigned_group_id %}disabled title="Already in a group"{% endif %}></td>
+<td style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.machine_name}}{% if m.department %} | {{m.department}}{% endif %}">
+  {{m.machine_name}}{% if m.department %}<br><span style="font-size:10px;color:var(--tx3);font-weight:400">{{m.department}}</span>{% endif %}
 </td>
-<td class="mono" style="min-width:110px">{{m.system_name or '—'}}<br><span style="color:var(--tx3);font-size:10.5px">{{m.ip_address or ''}}</span></td>
-<td class="mono trunc" style="min-width:140px" title="{{m.shared_folder or ''}}">{{m.shared_folder or '—'}}</td>
-<td class="mono trunc" style="min-width:110px" title="{{m.remote_path or ''}}">{% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}</td>
-<td class="mono" style="font-size:11px">{{m.username or '—'}}</td>
-<td style="font-size:11px;min-width:90px">
+<td class="mono" style="font-size:11.5px;overflow:hidden" title="{{m.system_name or ''}} {{m.ip_address or ''}}">
+  {{m.system_name or '—'}}<br><span style="color:var(--tx3);font-size:10px">{{m.ip_address or ''}}</span>
+</td>
+<td class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.shared_folder or ''}}">{{m.shared_folder or '—'}}</td>
+<td class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.remote_path or ''}}">
+  {% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}
+</td>
+<td class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.username or ''}}">{{m.username or '—'}}</td>
+<td style="font-size:11px;overflow:hidden">
   {% if m.assigned_group_name %}<span class="badge b-purple" style="font-size:10px">{{m.assigned_group_name}}</span>
   {% else %}<span style="color:var(--tx3)">—</span>{% endif %}
 </td>
-<td style="min-width:80px">{% if m.tags %}{% for t in m.tags.split(',') %}{% if t.strip() %}<span class="chip" style="font-size:10px;padding:2px 6px;margin:1px 2px">{{t.strip()}}</span>{% endif %}{% endfor %}{% endif %}</td>
-<td id="health_{{m.master_id}}" style="min-width:80px">
-{% if m.health_status=='OK' %}<span class="badge b-ok">&#10003; OK</span>
-{% elif m.health_status=='PARTIAL' %}<span class="badge b-warn">&#9888; Partial</span>
-{% elif m.health_status=='FAIL' %}<span class="badge b-err">&#10007; Fail</span>
-{% else %}<span class="badge b-gray">— Unknown</span>{% endif %}
+<td style="overflow:hidden">
+  {% if m.tags %}{% for t in m.tags.split(',') %}{% if t.strip() %}<span class="chip" style="font-size:10px;padding:2px 5px;margin:1px">{{t.strip()}}</span>{% endif %}{% endfor %}{% endif %}
 </td>
-<td id="issue_{{m.master_id}}" style="min-width:160px;font-size:10.5px">
+<td id="health_{{m.master_id}}">
+  {% if m.health_status=='OK' %}<span class="badge b-ok">&#10003; OK</span>
+  {% elif m.health_status=='PARTIAL' %}<span class="badge b-warn">&#9888; Partial</span>
+  {% elif m.health_status=='FAIL' %}<span class="badge b-err">&#10007; Fail</span>
+  {% else %}<span class="badge b-gray">Unknown</span>{% endif %}
+</td>
+<td id="issue_{{m.master_id}}" style="font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+    title="{% if m.health_detail %}{{m.health_detail}}{% endif %}">
   {% if m.health_status in ('FAIL','PARTIAL') and m.health_detail %}
-    <span style="color:var(--err)" title="{{m.health_detail}}">
-      {{m.health_detail.split('FAIL ')[1].split('|')[0][:60] if 'FAIL ' in m.health_detail else m.health_detail[:60]}}
+    <span style="color:var(--err)">
+      {{m.health_detail.split('FAIL ')[1].split('|')[0][:55] if 'FAIL ' in m.health_detail else m.health_detail[:55]}}
     </span>
   {% elif m.health_checked_at %}
     <span style="color:var(--tx3)">{{m.health_checked_at[:16]}}</span>
   {% else %}<span style="color:var(--tx3)">Not checked</span>{% endif %}
 </td>
-<td style="min-width:230px"><div class="act-cell">
-<button class="btn btn-o btn-s" onclick="checkHealth({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
-<button class="btn btn-o btn-s" onclick="viewDetail({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Detail</button>
-<button class="btn btn-o btn-s" onclick="loadEditMaster({{m.master_id}})">Edit</button>
-{% if m.assigned_group_id %}
-<button class="btn btn-o btn-s" style="color:var(--warn);border-color:var(--warn)" onclick="untagMachine({{m.master_id}},'{{m.machine_name|replace("'","\\'")|replace('"','\\"')}}','{{(m.assigned_group_name or '')|replace("'","\\'")|replace('"','\\\"')}}')">Untag</button>
-{% else %}
-<form method="post" action="/api/master-machines/{{m.master_id}}/toggle" style="margin:0"><button class="btn btn-o btn-s">{{'Off' if m.is_active else 'On'}}</button></form>
-{% endif %}
-<form method="post" action="/api/master-machines/{{m.master_id}}/delete" style="margin:0" onsubmit="return confirm('Delete {{m.machine_name}}?')"><button class="btn btn-s" style="color:var(--err);border:1px solid var(--err);background:transparent">Del</button></form>
+<td><div class="act-cell">
+  <button class="btn btn-o btn-s" onclick="checkHealth({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
+  <button class="btn btn-o btn-s" onclick="viewDetail({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Detail</button>
+  <button class="btn btn-o btn-s" onclick="loadEditMaster({{m.master_id}})">Edit</button>
+  {% if m.assigned_group_id %}
+  <button class="btn btn-o btn-s" style="color:var(--warn);border-color:var(--warn)" onclick="untagMachine({{m.master_id}},'{{m.machine_name|replace("'","\\'")|replace('"','\\"')}}','{{(m.assigned_group_name or '')|replace("'","\\'")|replace('"','\\\"')}}')">Untag</button>
+  {% else %}
+  <form method="post" action="/api/master-machines/{{m.master_id}}/toggle" style="margin:0"><button class="btn btn-o btn-s">{{'Off' if m.is_active else 'On'}}</button></form>
+  {% endif %}
+  <form method="post" action="/api/master-machines/{{m.master_id}}/delete" style="margin:0" onsubmit="return confirm('Delete {{m.machine_name}}?')"><button class="btn btn-s" style="color:var(--err);border:1px solid var(--err);background:transparent">Del</button></form>
 </div></td>
-</tr>{% endfor %}
+</tr>
+{% endfor %}
+</tbody>
 </table>
 <div id="mNoResults" style="display:none" class="empty">No machines match filter.</div>
 </div>
