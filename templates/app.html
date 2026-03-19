@@ -600,38 +600,183 @@ document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 <div class="top"><h2>Job #{{j.job_id}} &mdash; {{j.group_name}}</h2>
 <div class="act">
 <span class="mono" style="color:var(--tx3);font-size:11px">{{j.job_date}}</span>
-{% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUNNING</span>{% elif j.status=='KILLED' %}<span class="badge b-err">KILLED</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}
+<span id="jbadge">{% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUNNING</span>{% elif j.status=='KILLED' %}<span class="badge b-err">KILLED</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}</span>
 {% if j.status=='RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/kill" style="display:inline"><button class="btn btn-r btn-s" onclick="return confirm('Kill this job?')">Kill Job</button></form>{% endif %}
 {% if j.status != 'RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/delete" style="display:inline" onsubmit="return confirm('Delete Job #{{j.job_id}} permanently?')"><button class="btn btn-o btn-s" style="color:var(--err);border-color:var(--err)">Delete Job</button></form>{% endif %}
 </div></div>
 <div class="ct">
-<div class="sg">
-<div class="st"><div class="lb">Total Categories</div><div class="vl">{{j.total_cats}}</div></div>
-<div class="st"><div class="lb">Completed</div><div class="vl g">{{j.completed_cats}}</div></div>
-<div class="st"><div class="lb">Failed</div><div class="vl r">{{j.failed_cats}}</div></div>
+<div class="sg" style="margin-bottom:14px">
+<div class="st"><div class="lb">Total</div><div class="vl" id="st_total">{{j.total_cats}}</div></div>
+<div class="st"><div class="lb">Completed</div><div class="vl g" id="st_ok">{{j.completed_cats}}</div></div>
+<div class="st"><div class="lb">Failed</div><div class="vl r" id="st_fail">{{j.failed_cats}}</div></div>
+<div class="st"><div class="lb">Queued</div><div class="vl b" id="st_queued">{{queue|selectattr('status','eq','QUEUED')|list|length}}</div></div>
 </div>
-<div class="card"><h3>Category Queue</h3>
-<table><tr><th>Category</th><th>Machine</th><th>Status</th><th>Duration</th><th>Error</th></tr>
-{% for q in queue %}<tr>
+{% if j.status=='RUNNING' %}
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;font-size:11px">
+<span style="font-weight:600;color:var(--tx2)">STAGES:</span>
+<span class="tag">&#9634; QUEUED</span>
+<span style="color:var(--blue);font-family:monospace">AUTH</span><span style="color:var(--tx3)">&#8594;</span>
+<span style="color:var(--blue);font-family:monospace">COPY</span><span style="color:var(--tx3)">&#8594;</span>
+<span style="color:var(--ac2);font-family:monospace">SESSION</span><span style="color:var(--tx3)">&#8594;</span>
+<span style="color:var(--ac2);font-family:monospace">SCHTASKS</span><span style="color:var(--tx3)">&#8594;</span>
+<span style="color:var(--warn);font-family:monospace">&#9203; WAITING</span><span style="color:var(--tx3)">&#8594;</span>
+<span style="color:var(--blue);font-family:monospace">COLLECT</span><span style="color:var(--tx3)">&#8594;</span>
+<span style="color:var(--ok);font-family:monospace">&#10003; DONE</span>
+</div>
+{% endif %}
+<div class="card" style="padding:0;overflow:hidden">
+<div style="padding:12px 18px 10px;border-bottom:1px solid var(--bdr);display:flex;justify-content:space-between;align-items:center">
+<h3 style="margin:0">Category Queue</h3>
+{% if j.status=='RUNNING' %}<span style="font-size:11px;color:var(--tx3)">Live — updates every 4s</span>{% endif %}
+</div>
+<div style="overflow-x:auto">
+<table id="queueTable" style="table-layout:fixed;width:100%;min-width:680px">
+<colgroup><col style="width:155px"><col style="width:100px"><col style="width:130px"><col style="width:185px"><col style="width:80px"><col style="width:auto"></colgroup>
+<thead><tr><th>Category</th><th>Machine</th><th>Status</th><th>Current Step</th><th>Duration</th><th>{% if j.status=='RUNNING' %}Actions{% else %}Error{% endif %}</th></tr></thead>
+<tbody id="queueBody">
+{% for q in queue %}<tr id="qrow_{{q.queue_id}}">
 <td><span class="tag" style="font-size:12px">{{q.cat_value}}</span></td>
-<td style="font-size:12px">{{q.machine_name or '-'}}</td>
-<td>{% if q.status=='SUCCESS' %}<span class="badge b-ok">OK</span>{% elif q.status=='RUNNING' %}<span class="badge b-blue pulse">RUN</span>{% elif q.status=='QUEUED' %}<span class="badge b-gray">QUEUED</span>{% elif q.status=='CANCELLED' %}<span class="badge b-warn">CANCEL</span>{% else %}<span class="badge b-err">FAIL</span>{% endif %}</td>
-<td class="mono">{{"%.1f"|format(q.duration_secs)~'s' if q.duration_secs else '-'}}</td>
-<td style="font-size:11px;color:var(--err);max-width:300px">{{q.error_message[:120] if q.error_message else ''}}</td>
-</tr>{% endfor %}</table></div>
-<div class="card"><div class="fx mb" style="justify-content:space-between"><h3 style="margin:0">Execution Log</h3>
-<form method="post" action="/api/logs/clear/{{j.job_id}}" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Clear logs for this job?')">Clear Logs</button></form>
-</div><div style="max-height:380px;overflow-y:auto">
-<table class="lt"><tr><th>Time</th><th>Lvl</th><th>Machine</th><th>Step</th><th>Message</th></tr>
+<td style="font-size:12px;font-weight:500" id="qm_{{q.queue_id}}">{{q.machine_name or '&#8212;'}}</td>
+<td id="qs_{{q.queue_id}}">
+  {% if q.status=='SUCCESS' %}<span class="badge b-ok">&#10003; OK</span>
+  {% elif q.status=='RUNNING' %}<span class="badge b-blue pulse">&#9654; RUN</span>
+  {% elif q.status=='QUEUED' %}<span class="badge b-gray">&#9634; QUEUED</span>
+  {% elif q.status=='CANCELLED' %}<span class="badge b-warn">&#8856; CANCEL</span>
+  {% else %}<span class="badge b-err">&#10007; FAIL</span>{% endif %}
+</td>
+<td id="qstep_{{q.queue_id}}" style="font-size:11px;color:var(--tx3)">&#8212;</td>
+<td class="mono" id="qdur_{{q.queue_id}}">{{"%.1f"|format(q.duration_secs)~'s' if q.duration_secs else '&#8212;'}}</td>
+<td id="qact_{{q.queue_id}}" style="font-size:11px;color:var(--err)">{{q.error_message[:80] if q.error_message else ''}}</td>
+</tr>{% endfor %}
+</tbody>
+</table>
+</div>
+</div>
+<div class="card" style="margin-top:12px">
+<div class="fx mb" style="justify-content:space-between">
+<h3 style="margin:0">Execution Log</h3>
+<form method="post" action="/api/logs/clear/{{j.job_id}}" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Clear logs?')">Clear Logs</button></form>
+</div>
+<div id="logBox" style="max-height:340px;overflow-y:auto">
+<table class="lt" style="table-layout:fixed;width:100%">
+<colgroup><col style="width:72px"><col style="width:48px"><col style="width:80px"><col style="width:100px"><col style="width:auto"></colgroup>
+<thead><tr><th>Time</th><th>Lvl</th><th>Machine</th><th>Step</th><th>Message</th></tr></thead>
+<tbody id="logBody">
 {% for l in logs %}<tr>
 <td style="white-space:nowrap">{{l.created_at[11:19] if l.created_at else ''}}</td>
 <td class="{{'le' if l.log_level=='ERROR' else 'lw' if l.log_level=='WARN' else 'li'}}">{{l.log_level}}</td>
-<td style="white-space:nowrap">{{l.machine_name or ''}}</td>
-<td><span class="tag">{{l.step}}</span></td>
-<td style="{{'color:var(--err)' if l.log_level=='ERROR' else ''}}">{{l.message}}</td>
-</tr>{% endfor %}</table></div></div>
+<td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{l.machine_name or ''}}</td>
+<td><span class="tag" style="font-size:10px">{{l.step}}</span></td>
+<td style="{{'color:var(--err)' if l.log_level=='ERROR' else ''}};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{l.message}}">{{l.message}}</td>
+</tr>{% endfor %}
+</tbody>
+</table>
 </div>
-{% if j.status=='RUNNING' %}<script>setTimeout(()=>location.reload(),3000);</script>{% endif %}
+</div>
+</div>
+
+{% if j.status=='RUNNING' %}
+<script>
+const JID={{j.job_id}};
+let _freeMachines=[];
+
+function stepBadge(step,status){
+  if(status==='SUCCESS') return '<span class="badge b-ok">&#10003; OK</span>';
+  if(status==='FAILED')  return '<span class="badge b-err">&#10007; FAIL</span>';
+  if(status==='CANCELLED') return '<span class="badge b-warn">&#8856; CANCEL</span>';
+  if(status==='QUEUED')  return '<span class="badge b-gray">&#9634; QUEUED</span>';
+  const stepColors={AUTH:'#74b9ff',COPY:'#74b9ff',COPY_OK:'#74b9ff',
+    SESSION:'#a29bfe',SCHTASKS:'#a29bfe',VBS_READY:'#fdcb6e',
+    WAITING:'#fdcb6e',COLLECT:'#74b9ff',OUTPUT:'#00b894',
+    MACRO_DONE:'#00b894',CAT_DONE:'#00b894'};
+  const icons={WAITING:'&#9203;',COLLECT:'&#128230;',AUTH:'&#128274;',
+    COPY:'&#128190;',SCHTASKS:'&#9881;',SESSION:'&#128100;',MACRO_DONE:'&#9654;'};
+  const col=stepColors[step]||'#74b9ff';
+  const icon=icons[step]||'&#9654;';
+  return `<span class="badge b-blue pulse" style="background:rgba(116,185,255,.1);color:${col}">${icon} ${step||'RUN'}</span>`;
+}
+
+function stepDetail(step,msg){
+  if(!step||step==='CAT_START') return '&#8212;';
+  const clean=(msg||'').replace(/^[A-Z0-9_]+:\s*/,'').substring(0,65);
+  return `<span class="tag" style="font-size:10px">${step}</span> <span style="color:var(--tx3);font-size:10.5px">${clean}</span>`;
+}
+
+function actionCell(qi){
+  const btns=[];
+  if(qi.status==='RUNNING'||qi.status==='FAILED'||qi.status==='CANCELLED'){
+    btns.push(`<form method="post" action="/api/queue/${qi.id}/requeue" style="display:inline">
+      <button class="btn btn-s" style="color:var(--warn);border:1px solid var(--warn);background:transparent" title="Send back to queue — another free machine will pick it up">&#8635; Requeue</button>
+    </form>`);
+  }
+  if(qi.status==='RUNNING'&&qi.machine_id){
+    btns.push(`<button class="btn btn-s" style="color:var(--err);border:1px solid var(--err);background:transparent;margin-left:4px"
+      onclick="removeMachine(${qi.machine_id},'${(qi.machine||'').replace(/'/g,String.fromCharCode(39))}')"
+      title="Remove machine — QUEUED items return to pool">&#8861; Remove</button>`);
+  }
+  return btns.join('');
+}
+
+async function poll(){
+  try{
+    const r=await fetch('/api/jobs/'+JID+'/live');
+    if(!r.ok){setTimeout(poll,6000);return;}
+    const d=await r.json();
+    _freeMachines=d.free_machines||[];
+
+    $('st_ok').textContent=d.completed;
+    $('st_fail').textContent=d.failed;
+    $('st_queued').textContent=d.queue.filter(q=>q.status==='QUEUED').length;
+
+    d.queue.forEach(qi=>{
+      const sb=$('qs_'+qi.id);if(sb)sb.innerHTML=stepBadge(qi.step,qi.status);
+      const sm=$('qm_'+qi.id);if(sm)sm.textContent=qi.machine||'—';
+      const sd=$('qstep_'+qi.id);if(sd)sd.innerHTML=stepDetail(qi.step,qi.step_msg);
+      const dur=$('qdur_'+qi.id);
+      if(dur)dur.textContent=qi.duration?qi.duration.toFixed(1)+'s':(qi.status==='RUNNING'?'running…':'—');
+      const act=$('qact_'+qi.id);
+      if(act){
+        if(d.running&&(qi.status==='RUNNING'||qi.status==='FAILED'||qi.status==='CANCELLED')){
+          act.innerHTML=actionCell(qi);
+        }else if(qi.error){
+          act.innerHTML=`<span style="color:var(--err)">${qi.error.substring(0,80)}</span>`;
+        }else{act.innerHTML='';}
+      }
+    });
+
+    if(d.logs&&d.logs.length){
+      const lb=$('logBody');
+      if(lb)lb.innerHTML=d.logs.map(l=>`<tr>
+        <td style="white-space:nowrap">${l.t}</td>
+        <td class="${l.lvl==='ERROR'?'le':l.lvl==='WARN'?'lw':'li'}">${l.lvl}</td>
+        <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.machine}</td>
+        <td><span class="tag" style="font-size:10px">${l.step}</span></td>
+        <td style="${l.lvl==='ERROR'?'color:var(--err)':''}overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${l.msg}">${l.msg}</td>
+      </tr>`).join('');
+    }
+
+    if(!d.running){
+      $('jbadge').innerHTML=d.status==='COMPLETED'?'<span class="badge b-ok">DONE</span>':
+        `<span class="badge b-warn">${d.status}</span>`;
+      return;
+    }
+    setTimeout(poll,4000);
+  }catch(e){setTimeout(poll,6000);}
+}
+
+async function removeMachine(mid,mname){
+  const free=_freeMachines.filter(m=>m.id!==mid);
+  const freeList=free.length?free.map(m=>m.name).join(', '):'none available right now';
+  if(!confirm(`Remove machine "${mname}" from this job?\n\nIts pending (QUEUED) categories will return to the pool.\nFree machines that can pick them up: ${freeList}\n\nProceed?`))return;
+  try{
+    const r=await fetch('/api/jobs/'+JID+'/remove-machine/'+mid,{method:'POST'});
+    toast('Machine removed — queued items back in pool','ok');
+  }catch(e){toast('Error: '+e.message,'fail');}
+}
+
+poll();
+</script>
+{% endif %}
 
 {# ═══ LOGS ═══ #}
 {% elif page=='logs' %}

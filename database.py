@@ -692,7 +692,38 @@ def claim_next(jid, mid):
             raise
     return None   # exhausted retries
 
-def finish_queue_item(qid, status, **kw):
+def requeue_category(qid):
+    """Reset a RUNNING or FAILED queue item back to QUEUED so another machine can pick it up."""
+    with db() as c:
+        c.execute("""UPDATE job_queue
+                     SET status='QUEUED', machine_id=NULL, started_at=NULL,
+                         finished_at=NULL, error_message=NULL, duration_secs=NULL
+                     WHERE queue_id=? AND status IN ('RUNNING','FAILED','CANCELLED')""", (qid,))
+        return c.total_changes > 0
+
+def remove_machine_from_job(jid, mid):
+    """Cancel all QUEUED items for this machine in this job — they go back to pool (QUEUED, machine_id=NULL).
+    RUNNING items are marked FAILED so the machine worker exits cleanly."""
+    with db() as c:
+        # Re-queue all QUEUED items assigned to this machine
+        c.execute("""UPDATE job_queue SET machine_id=NULL
+                     WHERE job_id=? AND machine_id=? AND status='QUEUED'""", (jid, mid))
+        # Mark RUNNING items as FAILED (machine is being removed, it can't finish them)
+        c.execute("""UPDATE job_queue SET status='FAILED', error_message='Machine removed from job by user',
+                         finished_at=datetime('now')
+                     WHERE job_id=? AND machine_id=? AND status='RUNNING'""", (jid, mid))
+
+def get_free_machines_for_job(jid):
+    """Return machines in the job's group that are active and not currently running a category."""
+    with db() as c:
+        row = c.execute("SELECT group_id FROM jobs WHERE job_id=?", (jid,)).fetchone()
+        if not row: return []
+        busy_mids = {r["machine_id"] for r in
+                     c.execute("SELECT DISTINCT machine_id FROM job_queue WHERE job_id=? AND status='RUNNING' AND machine_id IS NOT NULL", (jid,)).fetchall()}
+        machines = c.execute("SELECT * FROM machines WHERE group_id=? AND is_active=1", (row["group_id"],)).fetchall()
+        return [m for m in machines if m["machine_id"] not in busy_mids]
+
+
     allowed = {"finished_at","date_folder","output_files","error_message","duration_secs"}
     u = {k:v for k,v in kw.items() if k in allowed}
     u["status"] = status

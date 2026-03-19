@@ -466,6 +466,80 @@ async def kill_job(jid: int):
         D.kill_job_db(jid)
     return RedirectResponse(f"/jobs/{jid}", 303)
 
+@app.post("/api/queue/{qid}/requeue")
+async def requeue_item(qid: int):
+    """Re-queue a RUNNING/FAILED/CANCELLED category back to QUEUED pool."""
+    with D.db() as c:
+        row = c.execute("SELECT job_id, machine_id, cat_value, status FROM job_queue WHERE queue_id=?", (qid,)).fetchone()
+    if not row:
+        raise HTTPException(404)
+    jid = row["job_id"]
+    if not E.is_running(jid):
+        raise HTTPException(400, "Job is not running — cannot requeue")
+    ok = D.requeue_category(qid)
+    if ok:
+        D.add_log(jid, queue_id=qid, level="INFO", step="REQUEUE",
+                  message=f"Category '{row['cat_value']}' requeued by user (was {row['status']})")
+    return RedirectResponse(f"/jobs/{jid}", 303)
+
+@app.post("/api/jobs/{jid}/remove-machine/{mid}")
+async def remove_machine_from_job(jid: int, mid: int):
+    """Remove a machine from a running job — its QUEUED items return to pool."""
+    if not E.is_running(jid):
+        raise HTTPException(400, "Job is not running")
+    m = D.get_machine(mid)
+    if not m:
+        raise HTTPException(404)
+    D.remove_machine_from_job(jid, mid)
+    D.add_log(jid, machine_id=mid, level="WARN", step="MACHINE_REMOVED",
+              message=f"Machine '{m['machine_name']}' removed from job by user — queued items returned to pool")
+    return RedirectResponse(f"/jobs/{jid}", 303)
+
+@app.get("/api/jobs/{jid}/live")
+async def job_live(jid: int):
+    """Live polling endpoint — returns queue + last 30 logs + free machines."""
+    j = D.get_job(jid)
+    if not j: raise HTTPException(404)
+    q = D.get_queue(jid)
+    logs = D.get_logs(jid, 30)
+    free = D.get_free_machines_for_job(jid)
+
+    # Build per-queue-item step detail from latest log entry
+    qid_steps = {}
+    for l in reversed(list(logs)):
+        if l["queue_id"] and l["queue_id"] not in qid_steps:
+            qid_steps[l["queue_id"]] = {"step": l["step"], "msg": l["message"]}
+
+    queue_data = []
+    for qi in q:
+        step_info = qid_steps.get(qi["queue_id"], {})
+        queue_data.append({
+            "id": qi["queue_id"],
+            "cat": qi["cat_value"],
+            "machine": qi["machine_name"] or "",
+            "machine_id": qi["machine_id"],
+            "status": qi["status"],
+            "duration": qi["duration_secs"],
+            "error": qi["error_message"] or "",
+            "step": step_info.get("step", ""),
+            "step_msg": step_info.get("msg", ""),
+        })
+
+    return JSONResponse({
+        "job_id": jid,
+        "status": j["status"],
+        "completed": j["completed_cats"],
+        "failed": j["failed_cats"],
+        "total": j["total_cats"],
+        "running": E.is_running(jid),
+        "queue": queue_data,
+        "logs": [{"t": l["created_at"][11:19] if l["created_at"] else "",
+                  "lvl": l["log_level"], "machine": l["machine_name"] or "",
+                  "step": l["step"], "msg": l["message"]} for l in logs],
+        "free_machines": [{"id": m["machine_id"], "name": m["machine_name"]} for m in free],
+    })
+
+
 @app.post("/api/jobs/{jid}/delete")
 async def delete_job(jid: int):
     if E.is_running(jid):
