@@ -22,6 +22,9 @@ app = FastAPI(title="Macro Orchestrator")
 app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
 tpl = Jinja2Templates(directory=os.path.join(BASE, "templates"))
 D.init_db()
+# On startup, fix any jobs stuck as RUNNING from a previous server crash/restart
+# (nothing is running in memory yet, so all DB-RUNNING jobs are stale)
+D.fix_stale_running_jobs(set())
 
 import sys
 if "--reload" in sys.argv or any("--reload" in str(a) for a in sys.argv):
@@ -151,8 +154,16 @@ async def untag_master_machine(mid: int):
     m = D.get_master_machine(mid)
     if not m:
         raise HTTPException(404)
-    if m["assigned_group_id"] and D.group_has_active_job(m["assigned_group_id"]):
-        return JSONResponse({"error": f"Group '{m['assigned_group_name']}' has an active running job. Kill the job first before untagging."}, status_code=400)
+    if m["assigned_group_id"]:
+        running_jids = D.get_running_job_ids_for_group(m["assigned_group_id"])
+        actually_running = [jid for jid in running_jids if E.is_running(jid)]
+        if actually_running:
+            return JSONResponse({
+                "error": f"Group '{m['assigned_group_name']}' has a job currently running (#{actually_running[0]}). Kill it first."
+            }, status_code=400)
+        # Auto-fix any stale RUNNING jobs for this group
+        if running_jids:
+            D.fix_stale_running_jobs(set(E._running_jobs.keys()))
     D.untag_master_from_group(mid)
     return RedirectResponse("/machines", 303)
 
@@ -288,8 +299,13 @@ async def add_machine(gid: int, machine_name:str=Form(...), system_name:str=Form
 
 @app.post("/api/groups/{gid}/untag-machines")
 async def bulk_untag_machines(gid: int, machine_ids: str = Form(...)):
-    if D.group_has_active_job(gid):
-        raise HTTPException(400, "Cannot untag machines while a job is running. Kill the job first.")
+    running_jids = D.get_running_job_ids_for_group(gid)
+    actually_running = [jid for jid in running_jids if E.is_running(jid)]
+    if actually_running:
+        raise HTTPException(400, f"Group has job #{actually_running[0]} currently running. Kill it first.")
+    # Auto-fix stale RUNNING jobs
+    if running_jids:
+        D.fix_stale_running_jobs(set(E._running_jobs.keys()))
     ids = [int(x.strip()) for x in machine_ids.split(",") if x.strip().isdigit()]
     D.bulk_untag_machines(ids)
     return RedirectResponse(f"/groups/{gid}", 303)

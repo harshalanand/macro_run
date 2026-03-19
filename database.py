@@ -411,11 +411,35 @@ def delete_machine(mid):
                          WHERE machine_name=? AND assigned_group_id=?""",
                       (m["machine_name"], m["group_id"]))
 
+def get_running_job_ids_for_group(gid):
+    """Return list of job_ids that have status=RUNNING for this group."""
+    with db() as c:
+        rows = c.execute(
+            "SELECT job_id FROM jobs WHERE group_id=? AND status='RUNNING'", (gid,)
+        ).fetchall()
+        return [r["job_id"] for r in rows]
+
 def group_has_active_job(gid):
-    """Return True if any job for this group is currently RUNNING."""
+    """Return True if any job for this group is currently RUNNING in the DB."""
     with db() as c:
         r = c.execute("SELECT COUNT(*) c FROM jobs WHERE group_id=? AND status='RUNNING'", (gid,)).fetchone()
         return (r["c"] or 0) > 0
+
+def fix_stale_running_jobs(running_job_ids):
+    """Mark DB-RUNNING jobs that are no longer in-memory as KILLED (stale from server restart)."""
+    with db() as c:
+        rows = c.execute("SELECT job_id FROM jobs WHERE status='RUNNING'").fetchall()
+        for row in rows:
+            jid = row["job_id"]
+            if jid not in running_job_ids:
+                c.execute(
+                    "UPDATE jobs SET status='KILLED', finished_at=? WHERE job_id=? AND status='RUNNING'",
+                    (datetime.now().isoformat(), jid)
+                )
+                c.execute(
+                    "UPDATE job_queue SET status='CANCELLED' WHERE job_id=? AND status IN ('QUEUED','RUNNING')",
+                    (jid,)
+                )
 
 def untag_master_from_group(master_id):
     """Remove group assignment from master AND delete the machine from the group's machines table."""
