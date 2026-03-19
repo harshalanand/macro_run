@@ -694,36 +694,22 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
                       task_name, jid, qid, mid, mname, interactive=True):
     """Create + run scheduled task on the remote machine.
 
-    User resolution strategy:
-      - ALWAYS try to detect the ACTIVE logged-in user via 'query user'.
-      - Run the task AS that active user (/ru <user>, NO /rp — not needed
-        when the user has an active interactive session on the machine).
-      - The configured admin credentials (/u /p) are used ONLY to
-        authenticate the schtasks command to the remote machine — they
-        are NOT used as the run-as user unless no session is detected.
-
-    Fallback chain if no active session is detected:
-      1. Configured user + /it        (admin is the logged-in user)
-      2. Configured user, no /it      (headless, admin not logged in)
-      ERROR — do NOT fall back to SYSTEM (macro needs Excel/UI).
-
-    Fallback chain if active session IS detected:
-      1. Detected user + /it          (normal — user has desktop session)
-      2. Detected user, no /it        (session exists but /it rejected)
+    Key fix: schtasks /run returns 0 even when an /it task has no interactive
+    session — the task stays in 'Ready' state and never fires. We verify the
+    task is actually RUNNING after triggering, and retry without /it if stuck.
     """
     task_cmd = f'cscript //NoLogo "{vbs_local_path}"'
     local = _is_local(hostname)
 
-    # Strip domain prefix from configured admin username (used to CONNECT, not run-as)
     configured_ru = username
     if "\\" in configured_ru:
         configured_ru = configured_ru.split("\\", 1)[1]
 
     mode = "LOCAL" if local else "REMOTE"
 
-    # ── Step 1: Detect the active session user on the remote machine ──
+    # ── Step 1: Detect active session user ──
     ru_user = None
-    use_password = False      # active session user needs no /rp
+    use_password = False
 
     if not local:
         detected = _get_active_session_user(hostname, username, password, jid, qid, mid)
@@ -734,52 +720,82 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
                       f"{hostname}: active user = '{ru_user}' "
                       f"{'(same as configured)' if ru_user.lower() == configured_ru.lower() else f'[configured={configured_ru}]'}"
                       f" — task runs AS {ru_user}")
-            # Persist detected user to DB so it shows in UI
             D.update_machine_active_user(mid, ru_user)
             D.update_master_active_user(hostname, ru_user)
         else:
             ru_user = configured_ru
             use_password = True
             D.add_log(jid, qid, mid, "WARN", "SESSION",
-                      f"{hostname}: no active session detected — falling back to '{ru_user}'. "
-                      f"Macro may not run Excel visually without a logged-in user.")
+                      f"{hostname}: no active session detected — falling back to '{ru_user}'.")
             D.update_machine_active_user(mid, "")
     else:
         ru_user = configured_ru
         use_password = True
 
-    def _build_create(with_interactive, with_password):
-        cmd = ["schtasks", "/create"]
-        if not local:
-            # /u /p = admin credentials to AUTHENTICATE the command to remote machine
-            cmd += ["/s", hostname, "/u", username, "/p", password]
+    def _schtasks_base():
+        """Base schtasks args for /s authentication."""
+        if local:
+            return []
+        return ["/s", hostname, "/u", username, "/p", password]
+
+    def _build_create(with_interactive, with_password, run_as_system=False):
+        cmd = ["schtasks", "/create"] + _schtasks_base()
         cmd += ["/tn", task_name, "/tr", task_cmd,
                 "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"]
-        # /ru = which user's session the task RUNS IN on the target machine
-        cmd += ["/ru", ru_user]
-        if with_password:
-            cmd += ["/rp", password]
-        if with_interactive:
-            cmd.append("/it")
+        if run_as_system:
+            cmd += ["/ru", "SYSTEM"]          # always fires, no session needed
+        else:
+            cmd += ["/ru", ru_user]
+            if with_password:
+                cmd += ["/rp", password]
+            if with_interactive:
+                cmd.append("/it")
         return cmd
+
+    def _build_run():
+        return ["schtasks", "/run"] + _schtasks_base() + ["/tn", task_name]
+
+    def _build_delete():
+        return ["schtasks", "/delete"] + _schtasks_base() + ["/tn", task_name, "/f"]
+
+    def _task_is_running():
+        """Return True if the task is in Running state (not Ready/stuck)."""
+        try:
+            cmd = ["schtasks", "/query"] + _schtasks_base() + \
+                  ["/tn", task_name, "/fo", "csv", "/nh"]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                status_line = r.stdout.strip()
+                # CSV format: "TaskName","Next Run","Status"
+                # Status values: Running, Ready, Disabled, etc.
+                return "Running" in status_line
+        except:
+            pass
+        return False
 
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
               f"Scheduling task on {hostname} ({mode}) ru='{ru_user}'")
 
-    # ── Step 2: Try creating the task (with /it first, then without) ──
-    attempts = [
-        (True,  use_password, "interactive /it"),
-        (False, use_password, "headless (no /it)"),
+    # ── Step 2: Attempt order ──
+    # 1. Detected/configured user + /it   (interactive, preferred)
+    # 2. Detected/configured user, no /it  (headless)
+    # 3. SYSTEM (always fires, last resort — VBS runs but Excel hidden)
+    create_attempts = [
+        (True,  use_password, False, "interactive /it"),
+        (False, use_password, False, "headless (no /it)"),
+        (False, False,        True,  "SYSTEM fallback"),
     ]
 
     task_created = False
-    for with_it, with_pw, label in attempts:
-        create = _build_create(with_interactive=with_it, with_password=with_pw)
+    used_label = ""
+    for with_it, with_pw, as_system, label in create_attempts:
+        create = _build_create(with_it, with_pw, as_system)
         r = subprocess.run(create, capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
+            task_created = True
+            used_label = label
             D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
                       f"Task created [{label}] on {hostname}")
-            task_created = True
             break
         err = (r.stderr.strip() or r.stdout.strip())[:200]
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
@@ -787,29 +803,69 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
 
     if not task_created:
         D.add_log(jid, qid, mid, "ERROR", "SCHTASKS",
-                  f"{hostname}: could not create task as '{ru_user}'. "
-                  f"Ensure the machine has an active user session and admin credentials are correct.")
+                  f"{hostname}: all create attempts failed.")
         return False
 
     # ── Step 3: Trigger the task ──
     try:
-        run_cmd = ["schtasks", "/run"]
-        if not local:
-            run_cmd += ["/s", hostname, "/u", username, "/p", password]
-        run_cmd += ["/tn", task_name]
-
-        r2 = subprocess.run(run_cmd, capture_output=True, text=True, timeout=15)
+        r2 = subprocess.run(_build_run(), capture_output=True, text=True, timeout=15)
         if r2.returncode != 0:
             err = (r2.stderr.strip() or r2.stdout.strip())[:200]
             D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Trigger failed: {err}")
             return False
-
-        D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                  f"Task triggered on {hostname} — running as '{ru_user}'")
-        return True
     except Exception as e:
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Error triggering task: {e}")
         return False
+
+    # ── Step 4: Verify task actually started (critical fix) ──
+    # schtasks /run returns 0 even when /it task has no interactive session.
+    # The task stays in 'Ready' state and never fires. Detect this and retry.
+    time.sleep(3)  # give Windows a moment to start the task
+    if not _task_is_running():
+        D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
+                  f"Task appears stuck in Ready state on {hostname} "
+                  f"(created as [{used_label}], likely no interactive session for '{ru_user}'). "
+                  f"Retrying without /it...")
+        # Delete the stuck task and retry without /it, then with SYSTEM
+        try:
+            subprocess.run(_build_delete(), capture_output=True, timeout=10)
+        except:
+            pass
+
+        retry_attempts = [
+            (False, use_password, False, "headless retry"),
+            (False, False,        True,  "SYSTEM retry"),
+        ]
+        for with_it, with_pw, as_system, label in retry_attempts:
+            # Skip if we already tried this exact config
+            if not as_system and used_label == "headless (no /it)":
+                continue
+            create = _build_create(with_it, with_pw, as_system)
+            r = subprocess.run(create, capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                r2 = subprocess.run(_build_run(), capture_output=True, text=True, timeout=15)
+                if r2.returncode == 0:
+                    time.sleep(3)
+                    if _task_is_running() or as_system:
+                        D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
+                                  f"Task now running [{label}] on {hostname}")
+                        return True
+                    else:
+                        D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
+                                  f"[{label}] also stuck in Ready on {hostname}")
+            err = (r.stderr.strip() or r.stdout.strip())[:200]
+            D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
+                      f"Retry [{label}] failed: {err}")
+
+        D.add_log(jid, qid, mid, "ERROR", "SCHTASKS",
+                  f"{hostname}: task not running after all retries. "
+                  f"Check that Remote Scheduled Tasks Management firewall rule is enabled on {hostname}.")
+        return False
+
+    D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
+              f"Task confirmed running on {hostname} as '{ru_user}' [{used_label}]")
+    return True
+
 
 
 
