@@ -503,16 +503,32 @@ async def job_live(jid: int):
     j = D.get_job(jid)
     if not j: raise HTTPException(404)
     q = D.get_queue(jid)
-    logs = D.get_logs(jid, 30)
+    logs = D.get_logs(jid, 60)
     free = D.get_free_machines_for_job(jid)
 
-    # Build per-queue-item step detail from latest log entry
+    # Build per-queue-item: latest step + active user from SESSION log
     qid_steps = {}
+    qid_users = {}   # qid -> detected username from SESSION log
     for l in reversed(list(logs)):
-        if l["queue_id"] and l["queue_id"] not in qid_steps:
-            qid_steps[l["queue_id"]] = {"step": l["step"], "msg": l["message"]}
+        lid_q = l["queue_id"]
+        if lid_q:
+            if lid_q not in qid_steps:
+                qid_steps[lid_q] = {"step": l["step"], "msg": l["message"]}
+            # Extract active user from SESSION log message: "hostname: active user = 'vishnu.kumar' ..."
+            if l["step"] == "SESSION" and lid_q not in qid_users:
+                msg = l["message"] or ""
+                if "active user = '" in msg:
+                    try:
+                        qid_users[lid_q] = msg.split("active user = '")[1].split("'")[0]
+                    except:
+                        pass
+                elif "falling back to" in msg:
+                    try:
+                        qid_users[lid_q] = msg.split("falling back to '")[1].split("'")[0] + " (fallback)"
+                    except:
+                        pass
 
-    # Get active_user per machine_id for this job
+    # Also get active_user from DB as fallback for completed items
     machine_users = {}
     for qi in q:
         if qi["machine_id"] and qi["machine_id"] not in machine_users:
@@ -527,12 +543,14 @@ async def job_live(jid: int):
     for qi in q:
         step_info = qid_steps.get(qi["queue_id"], {})
         minfo = machine_users.get(qi["machine_id"], {})
+        # Prefer log-detected user (live), fall back to DB stored value
+        active_user = qid_users.get(qi["queue_id"]) or minfo.get("active_user", "")
         queue_data.append({
             "id": qi["queue_id"],
             "cat": qi["cat_value"],
             "machine": qi["machine_name"] or "",
             "machine_id": qi["machine_id"],
-            "active_user": minfo.get("active_user", ""),
+            "active_user": active_user,
             "run_mode": minfo.get("run_mode", "global"),
             "status": qi["status"],
             "duration": qi["duration_secs"],

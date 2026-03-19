@@ -704,27 +704,50 @@ document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 <script>
 const JID={{j.job_id}};
 let _freeMachines=[];
+let _machineUsers={};  // machine_id -> username for display on completed rows
 
-function stepBadge(step,status){
-  if(status==='SUCCESS') return '<span class="badge b-ok">&#10003; OK</span>';
-  if(status==='FAILED')  return '<span class="badge b-err">&#10007; FAIL</span>';
-  if(status==='CANCELLED') return '<span class="badge b-warn">&#8856; CANCEL</span>';
-  if(status==='QUEUED')  return '<span class="badge b-gray">&#9634; QUEUED</span>';
-  const stepColors={AUTH:'#74b9ff',COPY:'#74b9ff',COPY_OK:'#74b9ff',
-    SESSION:'#a29bfe',SCHTASKS:'#a29bfe',VBS_READY:'#fdcb6e',
-    WAITING:'#fdcb6e',COLLECT:'#74b9ff',OUTPUT:'#00b894',
-    MACRO_DONE:'#00b894',CAT_DONE:'#00b894'};
-  const icons={WAITING:'&#9203;',COLLECT:'&#128230;',AUTH:'&#128274;',
-    COPY:'&#128190;',SCHTASKS:'&#9881;',SESSION:'&#128100;',MACRO_DONE:'&#9654;'};
-  const col=stepColors[step]||'#74b9ff';
-  const icon=icons[step]||'&#9654;';
-  return `<span class="badge b-blue pulse" style="background:rgba(116,185,255,.1);color:${col}">${icon} ${step||'RUN'}</span>`;
+// Human-readable step labels
+const STEP_LABELS = {
+  CAT_START:  {icon:'▶', label:'Starting',       col:'#74b9ff'},
+  AUTH:       {icon:'🔒', label:'Authenticating', col:'#74b9ff'},
+  MKDIR:      {icon:'📁', label:'Creating folder', col:'#74b9ff'},
+  COPY:       {icon:'📋', label:'Copying files',  col:'#74b9ff'},
+  COPY_OK:    {icon:'✓',  label:'Files copied',   col:'#74b9ff'},
+  PREP_OK:    {icon:'✓',  label:'Machine ready',  col:'#74b9ff'},
+  SESSION:    {icon:'👤', label:'Detecting user',  col:'#a29bfe'},
+  VBS_READY:  {icon:'📝', label:'Script ready',    col:'#a29bfe'},
+  SCHTASKS:   {icon:'⚙',  label:'Scheduling task', col:'#a29bfe'},
+  MODE:       {icon:'⚙',  label:'Excel mode set',  col:'#a29bfe'},
+  WAITING:    {icon:'⏳', label:'Macro running',   col:'#fdcb6e'},
+  MACRO_DONE: {icon:'✓',  label:'Macro done',      col:'#00b894'},
+  COLLECT:    {icon:'📦', label:'Collecting output',col:'#74b9ff'},
+  OUTPUT:     {icon:'💾', label:'Saving output',   col:'#00b894'},
+  CAT_DONE:   {icon:'✓',  label:'Complete',        col:'#00b894'},
+  CAT_FAIL:   {icon:'✗',  label:'Failed',          col:'#e17055'},
+  REQUEUE:    {icon:'↺',  label:'Requeued',        col:'#fdcb6e'},
+};
+
+function stepBadge(step, status){
+  if(status==='SUCCESS') return '<span class="badge b-ok">✓ Done</span>';
+  if(status==='FAILED')  return '<span class="badge b-err">✗ Failed</span>';
+  if(status==='CANCELLED') return '<span class="badge b-warn">⊘ Cancelled</span>';
+  if(status==='QUEUED')  return '<span class="badge b-gray">⬜ Queued</span>';
+  // RUNNING — show which step with icon and label
+  const s = STEP_LABELS[step] || {icon:'▶', label: step||'Running', col:'#74b9ff'};
+  const isPulse = ['WAITING','SESSION','SCHTASKS','COPY'].includes(step);
+  return `<span class="badge b-blue${isPulse?' pulse':''}" style="background:rgba(116,185,255,.08);color:${s.col}">${s.icon} ${s.label}</span>`;
 }
 
-function stepDetail(step,msg){
-  if(!step||step==='CAT_START') return '&#8212;';
-  const clean=(msg||'').replace(/^[A-Z0-9_]+:\s*/,'').substring(0,65);
-  return `<span class="tag" style="font-size:10px">${step}</span> <span style="color:var(--tx3);font-size:10.5px">${clean}</span>`;
+function stepDetail(step, msg){
+  if(!step || step==='CAT_START' || step==='MODE') return '—';
+  const s = STEP_LABELS[step];
+  const label = s ? s.label : step;
+  // Clean the message: remove leading "MachineName: " prefix
+  let clean = (msg||'').replace(/^[A-Z0-9_\-]+:\s+/,'').replace(/^[^:]+:\s+/,'');
+  // Trim to readable length
+  if(clean.length > 80) clean = clean.substring(0,80)+'…';
+  if(!clean) return `<span class="tag" style="font-size:10px">${label}</span>`;
+  return `<span class="tag" style="font-size:10px">${label}</span> <span style="color:var(--tx3);font-size:10.5px" title="${(msg||'').replace(/"/g,'&quot;')}">${clean}</span>`;
 }
 
 function actionCell(qi){
@@ -748,6 +771,8 @@ async function poll(){
     if(!r.ok){setTimeout(poll,6000);return;}
     const d=await r.json();
     _freeMachines=d.free_machines||[];
+    // Cache active users for completed row fallback display
+    d.queue.forEach(qi=>{if(qi.machine_id&&qi.active_user)_machineUsers[qi.machine_id]=qi.active_user;});
 
     $('st_ok').textContent=d.completed;
     $('st_fail').textContent=d.failed;
@@ -762,12 +787,21 @@ async function poll(){
       // Active user cell
       const su=$('qu_'+qi.id);
       if(su){
-        if(qi.active_user){
-          const modeIcon=qi.run_mode==='hidden'?'&#128270;':qi.run_mode==='visible'?'&#128065;':'';
-          su.innerHTML=`<span style="color:var(--ok)" title="Logged-in user running macro">&#128100; ${qi.active_user}</span>`+
-            (modeIcon?` <span style="color:var(--tx3);font-size:10px">${modeIcon}</span>`:'');
-        }else if(qi.machine){
-          su.innerHTML='<span style="color:var(--tx3);font-size:10px">detecting…</span>';
+        if(qi.active_user && !qi.active_user.includes('(fallback)')){
+          const modeIcon=qi.run_mode==='hidden'?'🔍':qi.run_mode==='visible'?'👁':'';
+          su.innerHTML=`<span style="color:var(--ok);font-weight:600" title="Logged-in user on remote PC">👤 ${qi.active_user}</span>`
+            +(modeIcon?` <span style="color:var(--tx3);font-size:10px" title="Excel mode">${modeIcon}</span>`:'');
+        }else if(qi.active_user && qi.active_user.includes('(fallback)')){
+          const user=qi.active_user.replace(' (fallback)','');
+          su.innerHTML=`<span style="color:var(--warn)" title="No active session — running as configured user">⚠ ${user}</span>`;
+        }else if(qi.status==='RUNNING' && qi.machine){
+          su.innerHTML='<span style="color:var(--tx3);font-size:10px;font-style:italic">detecting…</span>';
+        }else if(qi.status==='QUEUED'){
+          su.innerHTML='<span style="color:var(--tx3)">—</span>';
+        }else if(qi.status==='SUCCESS'||qi.status==='FAILED'){
+          // Completed — show stored DB value from machine
+          const minfo=_machineUsers[qi.machine_id];
+          su.innerHTML=minfo?`<span style="color:var(--tx3)">👤 ${minfo}</span>`:'<span style="color:var(--tx3)">—</span>';
         }else{
           su.innerHTML='<span style="color:var(--tx3)">—</span>';
         }
