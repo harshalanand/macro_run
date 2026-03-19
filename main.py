@@ -414,15 +414,18 @@ async def test_machine_route(mid: int):
 async def import_cats(gid: int, file: UploadFile = File(...)):
     content = (await file.read()).decode("utf-8-sig")
     lines = []
-    if "," in content.split("\n")[0]:
+    first_line = content.split("\n")[0].strip()
+    if "," in first_line:
+        # CSV format — skip header row, take first column of each row
         reader = csv.reader(io.StringIO(content))
-        header = next(reader, None)
+        next(reader, None)  # always skip header
         for row in reader:
-            if row:
+            if row and row[0].strip():
                 lines.append(row[0].strip())
     else:
-        lines = [l.strip() for l in content.strip().splitlines()]
-    D.bulk_import_categories(gid, lines)
+        # Plain text — one value per line; bulk_import_categories handles header skip
+        lines = [l.strip() for l in content.strip().splitlines() if l.strip()]
+    added = D.bulk_import_categories(gid, lines)
     return RedirectResponse(f"/groups/{gid}", 303)
 
 # ── JOBS ────────────────────────────────────────────────────────────────────

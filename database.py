@@ -540,19 +540,35 @@ def get_categories(gid):
 
 def delete_category(cid):
     with db() as c:
+        # Null FK refs in job_queue before deleting
+        c.execute("UPDATE job_queue SET cat_id=0 WHERE cat_id=?", (cid,))
         c.execute("DELETE FROM categories WHERE cat_id=?", (cid,))
 
+def delete_all_categories(gid):
+    with db() as c:
+        # Null FK refs in job_queue for all cats in this group
+        c.execute("""UPDATE job_queue SET cat_id=0
+                     WHERE cat_id IN (SELECT cat_id FROM categories WHERE group_id=?)""", (gid,))
+        c.execute("DELETE FROM categories WHERE group_id=?", (gid,))
+
 def bulk_import_categories(gid, values):
+    """Insert categories, skipping blank lines and common header names."""
+    SKIP_HEADERS = {"cat_value", "category", "maj_no", "maj no", "value",
+                    "cat_no", "catvalue", "categories", "header"}
     added = 0
     with db() as c:
         for i, v in enumerate(values):
             v = v.strip()
-            if not v: continue
+            if not v:
+                continue
+            # Skip if this looks like a header row
+            if v.lower() in SKIP_HEADERS:
+                continue
             try:
-                c.execute("INSERT INTO categories(group_id,cat_value,sort_order) VALUES(?,?,?)", (gid,v,i))
+                c.execute("INSERT INTO categories(group_id,cat_value,sort_order) VALUES(?,?,?)", (gid, v, i))
                 added += 1
             except sqlite3.IntegrityError:
-                pass
+                pass  # duplicate — skip silently
     return added
 
 # ── JOBS & QUEUE ────────────────────────────────────────
