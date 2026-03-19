@@ -426,16 +426,17 @@ textarea{resize:vertical;min-height:60px}
 </div>
 
 <div style="overflow-x:auto">
-<table id="grpMachTable" style="table-layout:fixed;width:100%;min-width:820px">
+<table id="grpMachTable" style="table-layout:fixed;width:100%;min-width:900px">
 <colgroup>
   <col style="width:36px">
+  <col style="width:100px">
+  <col style="width:95px">
+  <col style="width:170px">
+  <col style="width:120px">
   <col style="width:110px">
-  <col style="width:110px">
-  <col style="width:190px">
-  <col style="width:130px">
-  <col style="width:140px">
-  <col style="width:70px">
-  <col style="width:200px">
+  <col style="width:80px">
+  <col style="width:100px">
+  <col style="width:185px">
 </colgroup>
 <thead>
 <tr>
@@ -445,7 +446,8 @@ textarea{resize:vertical;min-height:60px}
 <th>Shared Folder (UNC)</th>
 <th>Remote Path</th>
 <th>Username</th>
-<th>Status</th>
+<th>Mode</th>
+<th>Active User</th>
 <th>Actions</th>
 </tr>
 </thead>
@@ -460,7 +462,17 @@ textarea{resize:vertical;min-height:60px}
   {% if m.remote_path %}<span style="color:var(--ok)">{{m.remote_path}}</span>{% else %}<span style="color:var(--err)">NOT SET</span>{% endif %}
 </td>
 <td class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.username or ''}}">{{m.username or '—'}}</td>
-<td>{% if m.is_active %}<span class="badge b-ok">On</span>{% else %}<span class="badge b-gray">Off</span>{% endif %}</td>
+<td style="font-size:11px">
+  {% set mode = m.run_mode or 'global' %}
+  {% if mode=='hidden' %}<span class="badge b-gray" title="Excel runs hidden — faster, no screen">&#128270; Hidden</span>
+  {% elif mode=='visible' %}<span class="badge b-blue" title="Excel opens visibly on screen">&#128065; Visible</span>
+  {% else %}<span style="color:var(--tx3);font-size:10.5px">Global</span>{% endif %}
+</td>
+<td style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+    title="Last detected logged-in user on this machine">
+  {% if m.active_user %}<span style="color:var(--ok)">&#128100; {{m.active_user}}</span>
+  {% else %}<span style="color:var(--tx3)">—</span>{% endif %}
+</td>
 <td><div class="act-cell">
   <button class="btn btn-o btn-s" onclick="testMachine({{m.machine_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
   <button class="btn btn-o btn-s" onclick="editMachine({{m.machine_id}})">Edit</button>
@@ -526,6 +538,14 @@ textarea{resize:vertical;min-height:60px}
 <div class="fr"><div class="fg"><label>Shared Folder (UNC)</label><input type="text" name="shared_folder" id="em_folder" required></div><div class="fg"><label>Remote Local Path</label><input type="text" name="remote_path" id="em_remote" required></div></div>
 <div class="fr"><div class="fg"><label>IP Address</label><input type="text" name="ip_address" id="em_ip"></div><div class="fg"><label>Login Username</label><input type="text" name="username" id="em_user"></div></div>
 <div class="fr"><div class="fg"><label>Password (blank = keep)</label><input type="password" name="password" id="em_pass"></div><div class="fg"><label>Department</label><input type="text" name="department" id="em_dept"></div></div>
+<div class="fr"><div class="fg"><label>Excel Run Mode</label>
+<select name="run_mode" id="em_mode">
+<option value="global">Global (use Settings value)</option>
+<option value="hidden">Hidden — faster, no screen (recommended)</option>
+<option value="visible">Visible — Excel opens on screen</option>
+</select>
+<span style="font-size:10.5px;color:var(--tx3);margin-top:3px">Hidden is 20–40% faster. Visible lets you watch the macro run.</span>
+</div></div>
 <input type="hidden" name="location" id="em_loc" value="">
 <div class="fx mt" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Save</button></div>
 </form></div></div>
@@ -630,13 +650,17 @@ document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 {% if j.status=='RUNNING' %}<span style="font-size:11px;color:var(--tx3)">Live — updates every 4s</span>{% endif %}
 </div>
 <div style="overflow-x:auto">
-<table id="queueTable" style="table-layout:fixed;width:100%;min-width:680px">
-<colgroup><col style="width:155px"><col style="width:100px"><col style="width:130px"><col style="width:185px"><col style="width:80px"><col style="width:auto"></colgroup>
-<thead><tr><th>Category</th><th>Machine</th><th>Status</th><th>Current Step</th><th>Duration</th><th>{% if j.status=='RUNNING' %}Actions{% else %}Error{% endif %}</th></tr></thead>
+<table id="queueTable" style="table-layout:fixed;width:100%;min-width:780px">
+<colgroup><col style="width:145px"><col style="width:95px"><col style="width:105px"><col style="width:120px"><col style="width:165px"><col style="width:70px"><col style="width:auto"></colgroup>
+<thead><tr><th>Category</th><th>Machine</th><th>Active User</th><th>Status</th><th>Current Step</th><th>Duration</th><th id="qActHeader">Error</th></tr></thead>
 <tbody id="queueBody">
-{% for q in queue %}<tr id="qrow_{{q.queue_id}}">
+{% for q in queue %}
+<tr id="qrow_{{q.queue_id}}">
 <td><span class="tag" style="font-size:12px">{{q.cat_value}}</span></td>
-<td style="font-size:12px;font-weight:500" id="qm_{{q.queue_id}}">{{q.machine_name or '&#8212;'}}</td>
+<td style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="qm_{{q.queue_id}}">{{q.machine_name or '&#8212;'}}</td>
+<td id="qu_{{q.queue_id}}" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+  <span style="color:var(--tx3)">&#8212;</span>
+</td>
 <td id="qs_{{q.queue_id}}">
   {% if q.status=='SUCCESS' %}<span class="badge b-ok">&#10003; OK</span>
   {% elif q.status=='RUNNING' %}<span class="badge b-blue pulse">&#9654; RUN</span>
@@ -647,7 +671,8 @@ document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 <td id="qstep_{{q.queue_id}}" style="font-size:11px;color:var(--tx3)">&#8212;</td>
 <td class="mono" id="qdur_{{q.queue_id}}">{{"%.1f"|format(q.duration_secs)~'s' if q.duration_secs else '&#8212;'}}</td>
 <td id="qact_{{q.queue_id}}" style="font-size:11px;color:var(--err)">{{q.error_message[:80] if q.error_message else ''}}</td>
-</tr>{% endfor %}
+</tr>
+{% endfor %}
 </tbody>
 </table>
 </div>
@@ -728,9 +753,25 @@ async function poll(){
     $('st_fail').textContent=d.failed;
     $('st_queued').textContent=d.queue.filter(q=>q.status==='QUEUED').length;
 
+    // Set actions header on first poll
+    const qah=$('qActHeader');if(qah&&d.running)qah.textContent='Actions';
+
     d.queue.forEach(qi=>{
       const sb=$('qs_'+qi.id);if(sb)sb.innerHTML=stepBadge(qi.step,qi.status);
       const sm=$('qm_'+qi.id);if(sm)sm.textContent=qi.machine||'—';
+      // Active user cell
+      const su=$('qu_'+qi.id);
+      if(su){
+        if(qi.active_user){
+          const modeIcon=qi.run_mode==='hidden'?'&#128270;':qi.run_mode==='visible'?'&#128065;':'';
+          su.innerHTML=`<span style="color:var(--ok)" title="Logged-in user running macro">&#128100; ${qi.active_user}</span>`+
+            (modeIcon?` <span style="color:var(--tx3);font-size:10px">${modeIcon}</span>`:'');
+        }else if(qi.machine){
+          su.innerHTML='<span style="color:var(--tx3);font-size:10px">detecting…</span>';
+        }else{
+          su.innerHTML='<span style="color:var(--tx3)">—</span>';
+        }
+      }
       const sd=$('qstep_'+qi.id);if(sd)sd.innerHTML=stepDetail(qi.step,qi.step_msg);
       const dur=$('qdur_'+qi.id);
       if(dur)dur.textContent=qi.duration?qi.duration.toFixed(1)+'s':(qi.status==='RUNNING'?'running…':'—');
@@ -874,6 +915,7 @@ async function editMachine(mid){
     $('em_ip').value=m.ip_address||'';$('em_folder').value=m.shared_folder||'';
     $('em_remote').value=m.remote_path||'';$('em_user').value=m.username||'';
     $('em_pass').value='';$('em_dept').value=m.department||'';$('em_loc').value=m.location||'';
+    $('em_mode').value=m.run_mode||'global';
     $('editMachForm').action='/api/machines/'+mid+'/edit';
     $('editMachMo').classList.add('show');
   }catch(e){toast('Error: '+e.message,'fail')}

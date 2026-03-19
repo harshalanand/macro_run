@@ -179,6 +179,24 @@ def init_db():
             c.execute("SELECT assigned_group_id FROM machine_master LIMIT 1")
         except:
             c.execute("ALTER TABLE machine_master ADD COLUMN assigned_group_id INTEGER DEFAULT NULL")
+        try:
+            c.execute("SELECT run_mode FROM machines LIMIT 1")
+        except:
+            c.execute("ALTER TABLE machines ADD COLUMN run_mode TEXT DEFAULT 'global'")
+            # global = use group/settings value; hidden = force hidden; visible = force visible
+        try:
+            c.execute("SELECT active_user FROM machines LIMIT 1")
+        except:
+            c.execute("ALTER TABLE machines ADD COLUMN active_user TEXT DEFAULT ''")
+        try:
+            c.execute("SELECT run_mode FROM machine_master LIMIT 1")
+        except:
+            c.execute("ALTER TABLE machine_master ADD COLUMN run_mode TEXT DEFAULT 'global'")
+        try:
+            c.execute("SELECT active_user FROM machine_master LIMIT 1")
+        except:
+            c.execute("ALTER TABLE machine_master ADD COLUMN active_user TEXT DEFAULT ''")
+
 
         # Migration: make job_queue.cat_id nullable (was NOT NULL — blocked category deletes)
         # Detect by checking PRAGMA table_info for notnull on cat_id
@@ -285,7 +303,7 @@ def create_master_machine(name, system_name, ip, shared_folder, remote_path,
 def update_master_machine(mid, **kw):
     allowed = {"machine_name","system_name","ip_address","shared_folder","remote_path",
                "username","password","department","location","tags","is_active",
-               "assigned_group_id"}
+               "assigned_group_id","run_mode"}
     u = {k:v for k,v in kw.items() if k in allowed and v is not None}
     if not u: return
     with db() as c:
@@ -513,15 +531,26 @@ def toggle_machine(mid):
         c.execute("UPDATE machines SET is_active=1-is_active WHERE machine_id=?", (mid,))
 
 def update_machine(mid, **kw):
-    allowed = {"machine_name","system_name","ip_address","shared_folder","remote_path","username","password","department","location"}
+    allowed = {"machine_name","system_name","ip_address","shared_folder","remote_path",
+               "username","password","department","location","run_mode"}
     u = {k:v for k,v in kw.items() if k in allowed}
-    # Don't overwrite password with empty string (user left field blank = keep existing)
     if "password" in u and not u["password"]:
         del u["password"]
     if not u: return
     with db() as c:
         clause = ", ".join(f"{k}=?" for k in u)
         c.execute(f"UPDATE machines SET {clause} WHERE machine_id=?", list(u.values())+[mid])
+
+def update_machine_active_user(mid, username):
+    """Store the detected active session user for a group machine."""
+    with db() as c:
+        c.execute("UPDATE machines SET active_user=? WHERE machine_id=?", (username or "", mid))
+
+def update_master_active_user(machine_name, username):
+    """Store the detected active session user in machine master by name."""
+    with db() as c:
+        c.execute("UPDATE machine_master SET active_user=? WHERE machine_name=?", (username or "", machine_name))
+
 
 def bulk_import_machines(gid, rows):
     added = 0

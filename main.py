@@ -325,11 +325,13 @@ async def toggle_machine(mid: int):
 @app.post("/api/machines/{mid}/edit")
 async def edit_machine(mid: int, machine_name:str=Form(...), system_name:str=Form(""),
     ip_address:str=Form(""), shared_folder:str=Form(...), remote_path:str=Form(""),
-    username:str=Form(""), password:str=Form(""), department:str=Form(""), location:str=Form("")):
+    username:str=Form(""), password:str=Form(""), department:str=Form(""),
+    location:str=Form(""), run_mode:str=Form("global")):
     m = D.get_machine(mid)
     D.update_machine(mid, machine_name=machine_name, system_name=system_name,
         ip_address=ip_address, shared_folder=shared_folder, remote_path=remote_path,
-        username=username, password=password, department=department, location=location)
+        username=username, password=password, department=department,
+        location=location, run_mode=run_mode)
     return RedirectResponse(f"/groups/{m['group_id']}" if m else "/groups", 303)
 
 @app.post("/api/groups/{gid}/import-machines")
@@ -510,14 +512,28 @@ async def job_live(jid: int):
         if l["queue_id"] and l["queue_id"] not in qid_steps:
             qid_steps[l["queue_id"]] = {"step": l["step"], "msg": l["message"]}
 
+    # Get active_user per machine_id for this job
+    machine_users = {}
+    for qi in q:
+        if qi["machine_id"] and qi["machine_id"] not in machine_users:
+            m = D.get_machine(qi["machine_id"])
+            if m:
+                machine_users[qi["machine_id"]] = {
+                    "active_user": m["active_user"] or "",
+                    "run_mode": m["run_mode"] or "global",
+                }
+
     queue_data = []
     for qi in q:
         step_info = qid_steps.get(qi["queue_id"], {})
+        minfo = machine_users.get(qi["machine_id"], {})
         queue_data.append({
             "id": qi["queue_id"],
             "cat": qi["cat_value"],
             "machine": qi["machine_name"] or "",
             "machine_id": qi["machine_id"],
+            "active_user": minfo.get("active_user", ""),
+            "run_mode": minfo.get("run_mode", "global"),
             "status": qi["status"],
             "duration": qi["duration_secs"],
             "error": qi["error_message"] or "",

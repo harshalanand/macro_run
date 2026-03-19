@@ -244,8 +244,20 @@ def _run_job(jid):
                     except:
                         pass
 
-                    # Write VBS to remote share via UNC
-                    excel_visible = D.get_setting("excel_visible", "1") == "1"
+                    # Determine visible/hidden mode — per-machine overrides global setting
+                    global_visible = D.get_setting("excel_visible", "1") == "1"
+                    machine_run_mode = (m.get("run_mode") or "global").strip().lower()
+                    if machine_run_mode == "hidden":
+                        excel_visible = False
+                    elif machine_run_mode == "visible":
+                        excel_visible = True
+                    else:
+                        excel_visible = global_visible  # use global setting
+
+                    D.add_log(jid, qid, mid, "INFO", "MODE",
+                              f"{mname}: Excel={'VISIBLE' if excel_visible else 'HIDDEN'} "
+                              f"(machine={machine_run_mode}, global={'visible' if global_visible else 'hidden'})")
+
                     vbs_code = _make_vbs(excel_file, macro_name, target_cell,
                                          safe_cat, result_name, visible=excel_visible)
                     with open(vbs_unc, "w", encoding="utf-8") as f:
@@ -681,21 +693,23 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
     if not local:
         detected = _get_active_session_user(hostname, username, password, jid, qid, mid)
         if detected:
-            ru_user = detected.split("\\")[-1].strip()   # strip domain prefix
-            use_password = False   # /it with active session = no password needed
-            D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                      f"{hostname}: active session user = '{ru_user}' "
-                      f"{'(same as configured)' if ru_user.lower() == configured_ru.lower() else f'(configured={configured_ru})'} "
-                      f"— task will run AS '{ru_user}'")
+            ru_user = detected.split("\\")[-1].strip()
+            use_password = False
+            D.add_log(jid, qid, mid, "INFO", "SESSION",
+                      f"{hostname}: active user = '{ru_user}' "
+                      f"{'(same as configured)' if ru_user.lower() == configured_ru.lower() else f'[configured={configured_ru}]'}"
+                      f" — task runs AS {ru_user}")
+            # Persist detected user to DB so it shows in UI
+            D.update_machine_active_user(mid, ru_user)
+            D.update_master_active_user(hostname, ru_user)
         else:
-            # No active session detected — fall back to configured admin
             ru_user = configured_ru
             use_password = True
-            D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                      f"{hostname}: no active session detected — falling back to configured user '{ru_user}'. "
-                      f"Macro may not interact with Excel unless someone is logged in.")
+            D.add_log(jid, qid, mid, "WARN", "SESSION",
+                      f"{hostname}: no active session detected — falling back to '{ru_user}'. "
+                      f"Macro may not run Excel visually without a logged-in user.")
+            D.update_machine_active_user(mid, "")
     else:
-        # Local: run as configured user
         ru_user = configured_ru
         use_password = True
 
