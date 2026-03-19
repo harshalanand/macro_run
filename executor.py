@@ -209,12 +209,12 @@ def _run_job(jid):
 
         # == PHASE 2: Each machine processes categories via schtasks ==
         def machine_worker(mid, unc_folder):
-            m = D.get_machine(mid)
+            m = dict(D.get_machine(mid))   # convert sqlite3.Row → dict so .get() works
             mname = m["machine_name"]
-            hostname = (m["system_name"] or "").strip()
-            username = (m["username"] or "").strip()
-            password = (m["password"] or "").strip()
-            remote_path = (m["remote_path"] or "").strip()
+            hostname = (m.get("system_name") or "").strip()
+            username = (m.get("username") or "").strip()
+            password = (m.get("password") or "").strip()
+            remote_path = (m.get("remote_path") or "").strip()
 
             while not _kill_jobs.get(jid):
                 item = D.claim_next(jid, mid)
@@ -475,7 +475,10 @@ def _prep_machine(machine, job_folder, files, jid):
 # =====================================================================
 
 def _net_use_auth(unc_path, username, password, jid=None, mid=None, force=False):
-    """Authenticate to share for file copy via UNC. Tries access first unless force=True."""
+    """Authenticate to share for file copy via UNC.
+    Verifies WRITE access (not just read) since makedirs needs write permission.
+    force=True disconnects existing session and reconnects fresh.
+    """
     clean = unc_path.replace("/", "\\").rstrip("\\")
     parts = [p for p in clean.split("\\") if p]
     if len(parts) < 2:
@@ -483,38 +486,47 @@ def _net_use_auth(unc_path, username, password, jid=None, mid=None, force=False)
     server = parts[0]
     share = f"\\\\{server}\\{parts[1]}"
 
-    # Step 1: Check if already accessible (skip if force re-auth requested)
-    if not force:
-        try:
-            os.listdir(share)
-            if jid:
-                D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
-                          message=f"Share already accessible: {share}")
-            return True
-        except:
-            pass
-
-    # Step 2: Need to authenticate. Try multiple username formats.
-    # Extract plain username
+    # Extract plain username (strip domain prefix)
     plain_user = username
     if "\\" in plain_user:
         plain_user = plain_user.split("\\", 1)[1]
 
-    # Try in order: server\user, plain user, original input
-    attempts = [
+    # On force: disconnect existing session first so we get a fresh writable one
+    if force:
+        try:
+            subprocess.run(["net", "use", share, "/delete", "/yes"],
+                           capture_output=True, timeout=10)
+        except:
+            pass
+
+    # If not forcing, check if already accessible AND writable
+    if not force:
+        try:
+            os.listdir(share)
+            # Quick write test
+            test_f = os.path.join(share, "_writecheck_.tmp")
+            try:
+                with open(test_f, "w") as f:
+                    f.write("ok")
+                os.remove(test_f)
+                if jid:
+                    D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
+                              message=f"Share accessible+writable: {share}")
+                return True
+            except OSError:
+                # Readable but not writable — fall through to re-auth
+                pass
+        except:
+            pass
+
+    # Build auth attempts: server\user, plain user, original
+    attempts = list(dict.fromkeys([
         f"{server}\\{plain_user}",
         plain_user,
         username,
-    ]
-    # Deduplicate while keeping order
-    seen = set()
-    unique = []
-    for a in attempts:
-        if a not in seen:
-            seen.add(a)
-            unique.append(a)
+    ]))
 
-    for auth_user in unique:
+    for auth_user in attempts:
         try:
             r = subprocess.run(
                 ["net", "use", share, f"/user:{auth_user}", password, "/persistent:no"],
@@ -527,10 +539,9 @@ def _net_use_auth(unc_path, username, password, jid=None, mid=None, force=False)
         except:
             pass
 
-    # All attempts failed
     if jid:
         D.add_log(jid, machine_id=mid, level="WARN", step="AUTH",
-                  message=f"All auth attempts failed for {share}. Tried: {unique}")
+                  message=f"All auth attempts failed for {share}. Tried: {attempts}")
     return False
 
 
