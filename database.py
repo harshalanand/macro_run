@@ -257,9 +257,14 @@ def update_master_machine(mid, **kw):
 
 def delete_master_machine(mid):
     with db() as c:
-        # Also remove from any group it's assigned to
         m = c.execute("SELECT machine_name, assigned_group_id FROM machine_master WHERE master_id=?", (mid,)).fetchone()
         if m and m["assigned_group_id"]:
+            # Null FK refs in job_queue before removing from group machines
+            c.execute("""UPDATE job_queue SET machine_id=NULL
+                         WHERE machine_id IN (
+                             SELECT machine_id FROM machines
+                             WHERE machine_name=? AND group_id=?
+                         )""", (m["machine_name"], m["assigned_group_id"]))
             c.execute("DELETE FROM machines WHERE machine_name=? AND group_id=?",
                       (m["machine_name"], m["assigned_group_id"]))
         c.execute("DELETE FROM machine_master WHERE master_id=?", (mid,))
@@ -397,6 +402,8 @@ def get_machine(mid):
 def delete_machine(mid):
     with db() as c:
         m = c.execute("SELECT machine_name, group_id FROM machines WHERE machine_id=?", (mid,)).fetchone()
+        # Null FK refs in job_queue before deleting the machine row
+        c.execute("UPDATE job_queue SET machine_id=NULL WHERE machine_id=?", (mid,))
         c.execute("DELETE FROM machines WHERE machine_id=?", (mid,))
         # Untag the master record so it becomes available again
         if m:
@@ -416,10 +423,14 @@ def untag_master_from_group(master_id):
         m = c.execute("SELECT machine_name, assigned_group_id FROM machine_master WHERE master_id=?",
                       (master_id,)).fetchone()
         if m and m["assigned_group_id"]:
-            # Remove from the group machines table
+            # Null out FK references in job_queue before deleting the machine row
+            c.execute("""UPDATE job_queue SET machine_id=NULL
+                         WHERE machine_id IN (
+                             SELECT machine_id FROM machines
+                             WHERE machine_name=? AND group_id=?
+                         )""", (m["machine_name"], m["assigned_group_id"]))
             c.execute("DELETE FROM machines WHERE machine_name=? AND group_id=?",
                       (m["machine_name"], m["assigned_group_id"]))
-        # Clear assignment in master
         c.execute("UPDATE machine_master SET assigned_group_id=NULL WHERE master_id=?", (master_id,))
 
 def bulk_untag_machines(machine_ids):
@@ -429,6 +440,8 @@ def bulk_untag_machines(machine_ids):
             row = c.execute("SELECT machine_name, group_id FROM machines WHERE machine_id=?", (mid,)).fetchone()
             if not row:
                 continue
+            # Null FK refs in job_queue before deleting
+            c.execute("UPDATE job_queue SET machine_id=NULL WHERE machine_id=?", (mid,))
             c.execute("DELETE FROM machines WHERE machine_id=?", (mid,))
             c.execute("""UPDATE machine_master SET assigned_group_id=NULL
                          WHERE machine_name=? AND assigned_group_id=?""",
