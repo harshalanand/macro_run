@@ -39,7 +39,7 @@ if "--reload" in sys.argv or any("--reload" in str(a) for a in sys.argv):
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(r: Request):
-    return tpl.TemplateResponse("app.html", {"request": r, "page": "dash", "s": D.get_dashboard()})
+    return tpl.TemplateResponse("app.html", {"request": r, "page": "dash", "s": D.get_dashboard(), "cfg": D.get_all_settings()})
 
 @app.get("/machines", response_class=HTMLResponse)
 async def machines_page(r: Request, tag: str = "", imported: str = "", errors: str = ""):
@@ -54,7 +54,7 @@ async def machines_page(r: Request, tag: str = "", imported: str = "", errors: s
         "machines": machines, "tags": tags,
         "groups": groups, "active_tag": tag,
         "import_msg": import_msg
-    })
+    , "cfg": D.get_all_settings()})
 
 @app.post("/api/master-machines/import")
 async def import_master_machines(file: UploadFile = File(...)):
@@ -220,7 +220,7 @@ async def add_from_master(gid: int, master_ids: str = Form(...)):
 
 @app.get("/groups", response_class=HTMLResponse)
 async def groups_page(r: Request):
-    return tpl.TemplateResponse("app.html", {"request": r, "page": "groups", "groups": D.get_groups()})
+    return tpl.TemplateResponse("app.html", {"request": r, "page": "groups", "groups": D.get_groups(), "cfg": D.get_all_settings()})
 
 @app.get("/groups/{gid}", response_class=HTMLResponse)
 async def group_detail(r: Request, gid: int):
@@ -229,22 +229,23 @@ async def group_detail(r: Request, gid: int):
     return tpl.TemplateResponse("app.html", {"request": r, "page": "gdetail",
         "g": g, "machines": D.get_machines(gid), "files": D.get_files(gid),
         "cats": D.get_categories(gid), "jobs": D.get_jobs(20, gid),
-        "master_machines_all": D.get_master_machines_unassigned()})
+        "master_machines_all": D.get_master_machines_unassigned(),
+        "cfg": D.get_all_settings()})
 
 @app.get("/jobs", response_class=HTMLResponse)
 async def jobs_page(r: Request):
-    return tpl.TemplateResponse("app.html", {"request": r, "page": "jobs", "jobs": D.get_jobs(50)})
+    return tpl.TemplateResponse("app.html", {"request": r, "page": "jobs", "jobs": D.get_jobs(50), "cfg": D.get_all_settings()})
 
 @app.get("/jobs/{jid}", response_class=HTMLResponse)
 async def job_detail(r: Request, jid: int):
     j = D.get_job(jid)
     if not j: raise HTTPException(404)
     return tpl.TemplateResponse("app.html", {"request": r, "page": "jdetail",
-        "j": j, "queue": D.get_queue(jid), "logs": D.get_logs(jid, 500)})
+        "j": j, "queue": D.get_queue(jid), "logs": D.get_logs(jid, 500), "cfg": D.get_all_settings()})
 
 @app.get("/logs", response_class=HTMLResponse)
 async def logs_page(r: Request):
-    return tpl.TemplateResponse("app.html", {"request": r, "page": "logs", "logs": D.get_logs(limit=500)})
+    return tpl.TemplateResponse("app.html", {"request": r, "page": "logs", "logs": D.get_logs(limit=500), "cfg": D.get_all_settings()})
 
 @app.post("/api/logs/clear")
 async def clear_logs():
@@ -258,7 +259,7 @@ async def clear_job_logs(jid: int):
 
 @app.get("/emails", response_class=HTMLResponse)
 async def emails_page(r: Request):
-    return tpl.TemplateResponse("app.html", {"request": r, "page": "emails", "emails": D.get_email_logs()})
+    return tpl.TemplateResponse("app.html", {"request": r, "page": "emails", "emails": D.get_email_logs(), "cfg": D.get_all_settings()})
 
 @app.post("/api/emails/clear")
 async def clear_emails():

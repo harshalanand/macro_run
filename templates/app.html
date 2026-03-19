@@ -464,9 +464,16 @@ textarea{resize:vertical;min-height:60px}
 <td class="mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{m.username or ''}}">{{m.username or '—'}}</td>
 <td style="font-size:11px">
   {% set mode = m.run_mode or 'global' %}
-  {% if mode=='hidden' %}<span class="badge b-gray" title="Excel runs hidden — faster, no screen">&#128270; Hidden</span>
-  {% elif mode=='visible' %}<span class="badge b-blue" title="Excel opens visibly on screen">&#128065; Visible</span>
-  {% else %}<span style="color:var(--tx3);font-size:10.5px">Global</span>{% endif %}
+  {% if mode=='hidden' %}<span class="badge b-gray" style="font-size:10px" title="This machine always runs Hidden regardless of global setting">🔍 Hidden</span>
+  {% elif mode=='visible' %}<span class="badge b-blue" style="font-size:10px" title="This machine always runs Visible regardless of global setting">👁 Visible</span>
+  {% else %}
+    {% set gv = cfg.get('excel_visible','1') if cfg is defined else '1' %}
+    {% if gv == '0' %}
+      <span style="color:var(--tx3);font-size:10.5px" title="Uses global setting — currently Hidden. Change in Settings or override per machine.">🔍 Hidden <span style="font-size:9px">(global)</span></span>
+    {% else %}
+      <span style="color:var(--tx3);font-size:10.5px" title="Uses global setting — currently Visible. Change in Settings or override per machine.">👁 Visible <span style="font-size:9px">(global)</span></span>
+    {% endif %}
+  {% endif %}
 </td>
 <td style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
     title="Last detected logged-in user on this machine">
@@ -540,11 +547,13 @@ textarea{resize:vertical;min-height:60px}
 <div class="fr"><div class="fg"><label>Password (blank = keep)</label><input type="password" name="password" id="em_pass"></div><div class="fg"><label>Department</label><input type="text" name="department" id="em_dept"></div></div>
 <div class="fr"><div class="fg"><label>Excel Run Mode</label>
 <select name="run_mode" id="em_mode">
-<option value="global">Global (use Settings value)</option>
-<option value="hidden">Hidden — faster, no screen (recommended)</option>
-<option value="visible">Visible — Excel opens on screen</option>
+<option value="global">🌐 Global — use Settings value (currently <span id="globalModeLabel">checking...</span>)</option>
+<option value="hidden">🔍 Hidden — always run in background (20–40% faster, recommended for production)</option>
+<option value="visible">👁 Visible — always open Excel on screen (slower, good for debugging)</option>
 </select>
-<span style="font-size:10.5px;color:var(--tx3);margin-top:3px">Hidden is 20–40% faster. Visible lets you watch the macro run.</span>
+<span style="font-size:10.5px;color:var(--tx3);margin-top:3px;display:block">
+<strong>Global</strong> = follow the value in Settings page. <strong>Hidden</strong> = override to always hidden. <strong>Visible</strong> = override to always visible.
+</span>
 </div></div>
 <input type="hidden" name="location" id="em_loc" value="">
 <div class="fx mt" style="justify-content:flex-end;gap:6px"><button type="button" class="btn btn-o" onclick="this.closest('.mo-bg').classList.remove('show')">Cancel</button><button class="btn btn-p">Save</button></div>
@@ -893,10 +902,18 @@ poll();
 <form method="post" action="/api/settings">
 <div class="card"><h3>Execution Settings</h3>
 <div class="fr">
-<div class="fg" style="max-width:200px"><label>Excel Visible</label><select name="excel_visible">
-<option value="1" {{'selected' if cfg.get('excel_visible','1')=='1'}}>Visible (watch Excel open)</option>
-<option value="0" {{'selected' if cfg.get('excel_visible')=='0'}}>Hidden (background)</option>
-</select></div>
+<div class="fg" style="max-width:240px">
+  <label>Global Excel Mode <span style="color:var(--tx3);font-weight:400">(default for all machines)</span></label>
+  <select name="excel_visible">
+    <option value="1" {{'selected' if cfg.get('excel_visible','1')=='1'}}>👁 Visible — Excel opens on screen</option>
+    <option value="0" {{'selected' if cfg.get('excel_visible')=='0'}}>🔍 Hidden — runs in background (faster)</option>
+  </select>
+  <span style="font-size:10.5px;color:var(--tx3);margin-top:4px;display:block">
+    This is the <strong>Global</strong> setting. Each machine in a group can override it to Hidden or Visible individually via Edit Machine.
+    Hidden mode is <strong>20–40% faster</strong> — no screen rendering overhead.
+    Visible mode lets you watch the macro execute on the remote desktop.
+  </span>
+</div>
 <div class="fg" style="max-width:130px"><label>Timeout (sec)</label><input type="text" name="macro_timeout" value="{{cfg.get('macro_timeout','1800')}}"></div>
 <div class="fg"><label>PsExec Path</label><input type="text" name="psexec_path" value="{{cfg.get('psexec_path','psexec')}}" placeholder="psexec or D:\Tools\psexec.exe"></div>
 </div>
@@ -937,6 +954,9 @@ poll();
 <script>
 function $(id){return document.getElementById(id)}
 
+// Global excel mode from Settings (injected server-side)
+const _globalExcelMode = "{{cfg.get('excel_visible','1') if cfg is defined else '1'}}";
+
 function toast(msg,type){
   const t=$('toast');t.className='toast '+(type||'info');t.textContent=msg;t.style.display='block';
   clearTimeout(t._t);t._t=setTimeout(()=>{t.style.display='none'},6000);
@@ -950,6 +970,9 @@ async function editMachine(mid){
     $('em_remote').value=m.remote_path||'';$('em_user').value=m.username||'';
     $('em_pass').value='';$('em_dept').value=m.department||'';$('em_loc').value=m.location||'';
     $('em_mode').value=m.run_mode||'global';
+    // Update "currently X" label in Global option
+    const lbl=$('globalModeLabel');
+    if(lbl) lbl.textContent=_globalExcelMode==='0'?'Hidden':'Visible';
     $('editMachForm').action='/api/machines/'+mid+'/edit';
     $('editMachMo').classList.add('show');
   }catch(e){toast('Error: '+e.message,'fail')}
