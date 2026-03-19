@@ -101,10 +101,12 @@ def init_db():
         );
 
         -- Category queue items
+        -- cat_id is nullable: categories can be deleted/changed without breaking history
+        -- cat_value TEXT stores the actual value and is the source of truth for reports
         CREATE TABLE IF NOT EXISTS job_queue (
             queue_id    INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id      INTEGER NOT NULL,
-            cat_id      INTEGER NOT NULL,
+            cat_id      INTEGER,
             cat_value   TEXT NOT NULL,
             machine_id  INTEGER,
             status      TEXT DEFAULT 'QUEUED',
@@ -115,7 +117,6 @@ def init_db():
             error_message TEXT,
             duration_secs REAL,
             FOREIGN KEY (job_id) REFERENCES jobs(job_id) ON DELETE CASCADE,
-            FOREIGN KEY (cat_id) REFERENCES categories(cat_id),
             FOREIGN KEY (machine_id) REFERENCES machines(machine_id)
         );
 
@@ -178,6 +179,42 @@ def init_db():
             c.execute("SELECT assigned_group_id FROM machine_master LIMIT 1")
         except:
             c.execute("ALTER TABLE machine_master ADD COLUMN assigned_group_id INTEGER DEFAULT NULL")
+
+        # Migration: make job_queue.cat_id nullable (was NOT NULL — blocked category deletes)
+        # Detect by checking PRAGMA table_info for notnull on cat_id
+        col_info = c.execute("PRAGMA table_info(job_queue)").fetchall()
+        cat_col = next((col for col in col_info if col["name"] == "cat_id"), None)
+        if cat_col and cat_col["notnull"] == 1:
+            # Rebuild job_queue without NOT NULL on cat_id and without FK on cat_id
+            c.executescript("""
+                PRAGMA foreign_keys=OFF;
+                CREATE TABLE IF NOT EXISTS job_queue_new (
+                    queue_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id        INTEGER NOT NULL,
+                    cat_id        INTEGER,
+                    cat_value     TEXT NOT NULL,
+                    machine_id    INTEGER,
+                    status        TEXT DEFAULT 'QUEUED',
+                    started_at    TIMESTAMP,
+                    finished_at   TIMESTAMP,
+                    date_folder   TEXT,
+                    output_files  TEXT,
+                    error_message TEXT,
+                    duration_secs REAL,
+                    FOREIGN KEY (job_id) REFERENCES jobs(job_id) ON DELETE CASCADE,
+                    FOREIGN KEY (machine_id) REFERENCES machines(machine_id)
+                );
+                INSERT INTO job_queue_new
+                    SELECT queue_id,job_id,cat_id,cat_value,machine_id,status,
+                           started_at,finished_at,date_folder,output_files,
+                           error_message,duration_secs
+                    FROM job_queue;
+                DROP TABLE job_queue;
+                ALTER TABLE job_queue_new RENAME TO job_queue;
+                CREATE INDEX IF NOT EXISTS idx_queue_job ON job_queue(job_id);
+                CREATE INDEX IF NOT EXISTS idx_queue_status ON job_queue(status);
+                PRAGMA foreign_keys=ON;
+            """)
 
 
 
@@ -539,11 +576,13 @@ def get_categories(gid):
         return c.execute("SELECT * FROM categories WHERE group_id=? AND is_active=1 ORDER BY sort_order,cat_id", (gid,)).fetchall()
 
 def delete_category(cid):
+    """Delete a category. Nulls cat_id in historical job_queue rows (cat_value text is preserved)."""
     with db() as c:
         c.execute("UPDATE job_queue SET cat_id=NULL WHERE cat_id=?", (cid,))
         c.execute("DELETE FROM categories WHERE cat_id=?", (cid,))
 
 def delete_all_categories(gid):
+    """Delete all categories for a group. Nulls cat_id in historical queue rows."""
     with db() as c:
         c.execute("""UPDATE job_queue SET cat_id=NULL
                      WHERE cat_id IN (SELECT cat_id FROM categories WHERE group_id=?)""", (gid,))
