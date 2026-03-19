@@ -540,14 +540,12 @@ def get_categories(gid):
 
 def delete_category(cid):
     with db() as c:
-        # Null FK refs in job_queue before deleting
-        c.execute("UPDATE job_queue SET cat_id=0 WHERE cat_id=?", (cid,))
+        c.execute("UPDATE job_queue SET cat_id=NULL WHERE cat_id=?", (cid,))
         c.execute("DELETE FROM categories WHERE cat_id=?", (cid,))
 
 def delete_all_categories(gid):
     with db() as c:
-        # Null FK refs in job_queue for all cats in this group
-        c.execute("""UPDATE job_queue SET cat_id=0
+        c.execute("""UPDATE job_queue SET cat_id=NULL
                      WHERE cat_id IN (SELECT cat_id FROM categories WHERE group_id=?)""", (gid,))
         c.execute("DELETE FROM categories WHERE group_id=?", (gid,))
 
