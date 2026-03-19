@@ -752,7 +752,7 @@ def get_free_machines_for_job(jid):
         machines = c.execute("SELECT * FROM machines WHERE group_id=? AND is_active=1", (row["group_id"],)).fetchall()
         return [m for m in machines if m["machine_id"] not in busy_mids]
 
-
+def finish_queue_item(qid, status, **kw):
     allowed = {"finished_at","date_folder","output_files","error_message","duration_secs"}
     u = {k:v for k,v in kw.items() if k in allowed}
     u["status"] = status

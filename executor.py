@@ -419,10 +419,33 @@ def _prep_machine(machine, job_folder, files, jid):
 
     # Authenticate to share first (required for non-domain PCs)
     if shared.startswith("\\\\"):
-        _net_use_auth(shared, username, password, jid, mid)
+        auth_ok = _net_use_auth(shared, username, password, jid, mid)
+        if not auth_ok:
+            raise ValueError(f"{mname}: authentication failed for {shared} — check username/password")
 
-    # Create date folder
-    os.makedirs(unc_folder, exist_ok=True)
+    # Create job folder on the UNC share
+    # On some Windows shares, makedirs fails with [WinError 5] if:
+    #   a) The auth session expired between auth and mkdir
+    #   b) The share root is writable but subfolder creation needs a refresh
+    # Fix: retry once with explicit net use re-auth if first attempt fails
+    try:
+        os.makedirs(unc_folder, exist_ok=True)
+    except OSError as e:
+        if "5" in str(e) or "denied" in str(e).lower() or "access" in str(e).lower():
+            D.add_log(jid, machine_id=mid, level="WARN", step="MKDIR",
+                      message=f"{mname}: folder create failed ({e}), retrying after re-auth...")
+            # Force a fresh net use connection and retry
+            _net_use_auth(shared, username, password, jid, mid, force=True)
+            try:
+                os.makedirs(unc_folder, exist_ok=True)
+            except OSError as e2:
+                raise ValueError(
+                    f"{mname}: Cannot create folder '{unc_folder}': {e2}. "
+                    f"Check that the shared folder '{shared}' allows write access for user '{username}'. "
+                    f"On the remote PC, right-click the shared folder → Properties → Sharing → ensure '{username}' has Read/Write permission."
+                ) from e2
+        else:
+            raise
     copy_target = unc_folder
 
     # STEP 3: Copy files
@@ -451,8 +474,8 @@ def _prep_machine(machine, job_folder, files, jid):
 #  DRIVE MAPPING (Python-side, not VBS)
 # =====================================================================
 
-def _net_use_auth(unc_path, username, password, jid=None, mid=None):
-    """Authenticate to share for file copy via UNC. Tries access first."""
+def _net_use_auth(unc_path, username, password, jid=None, mid=None, force=False):
+    """Authenticate to share for file copy via UNC. Tries access first unless force=True."""
     clean = unc_path.replace("/", "\\").rstrip("\\")
     parts = [p for p in clean.split("\\") if p]
     if len(parts) < 2:
@@ -460,15 +483,16 @@ def _net_use_auth(unc_path, username, password, jid=None, mid=None):
     server = parts[0]
     share = f"\\\\{server}\\{parts[1]}"
 
-    # Step 1: Check if already accessible (don't break working connections)
-    try:
-        os.listdir(share)
-        if jid:
-            D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
-                      message=f"Share already accessible: {share}")
-        return True
-    except:
-        pass
+    # Step 1: Check if already accessible (skip if force re-auth requested)
+    if not force:
+        try:
+            os.listdir(share)
+            if jid:
+                D.add_log(jid, machine_id=mid, level="INFO", step="AUTH",
+                          message=f"Share already accessible: {share}")
+            return True
+        except:
+            pass
 
     # Step 2: Need to authenticate. Try multiple username formats.
     # Extract plain username
