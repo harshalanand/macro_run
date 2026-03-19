@@ -661,31 +661,97 @@ def _is_local(hostname):
 
 def _get_active_session_user(hostname, admin_username, admin_password, jid=None, qid=None, mid=None):
     """
-    Query the currently logged-in interactive user on a remote machine.
-    Uses 'query user /server:hostname' (requires prior net use auth).
-    Returns the plain username string, or None if not determinable.
+    Detect the currently logged-in interactive user on a remote machine.
+    Tries multiple methods in order until one succeeds.
+
+    Method 1: query user /server:hostname  (fastest, needs Remote Desktop Services)
+    Method 2: wmic /node:hostname computersystem get username  (works on most Windows)
+    Method 3: tasklist explorer.exe (finds user via their explorer.exe process)
     """
+    plain_user = admin_username.split("\\")[-1] if "\\" in admin_username else admin_username
+
+    # Method 1: query user
     try:
-        cmd = ["query", "user", f"/server:{hostname}"]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        r = subprocess.run(["query", "user", f"/server:{hostname}"],
+                           capture_output=True, text=True, timeout=15)
         if r.returncode == 0:
-            for line in r.stdout.splitlines()[1:]:   # skip header row
+            for line in r.stdout.splitlines()[1:]:
                 line = line.strip()
                 if not line:
                     continue
-                # Mark active session (line starts with ">")
-                # Format: >username  sessionname  id  Active  idletime  logontime
                 parts = line.lstrip(">").split()
                 if len(parts) >= 4 and parts[3].lower() == "active":
                     logged_user = parts[0].strip()
                     if jid:
                         D.add_log(jid, qid, mid, "INFO", "SESSION",
-                                  f"Detected logged-in user on {hostname}: {logged_user}")
+                                  f"{hostname}: active user = '{logged_user}' (via query user)")
                     return logged_user
     except Exception as e:
         if jid:
             D.add_log(jid, qid, mid, "INFO", "SESSION",
-                      f"Could not query session on {hostname}: {e}")
+                      f"{hostname}: query user failed ({e}), trying WMI...")
+
+    # Method 2: wmic computersystem get username
+    try:
+        r = subprocess.run(
+            ["wmic", f"/node:{hostname}", f"/user:{admin_username}",
+             f"/password:{admin_password}", "computersystem", "get", "username", "/format:value"],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line.lower().startswith("username=") and "=" in line:
+                    val = line.split("=", 1)[1].strip()
+                    if val:
+                        # val may be DOMAIN\user or just user
+                        logged_user = val.split("\\")[-1].strip()
+                        if logged_user and logged_user.lower() not in ("", "username"):
+                            if jid:
+                                D.add_log(jid, qid, mid, "INFO", "SESSION",
+                                          f"{hostname}: active user = '{logged_user}' (via WMI)")
+                            return logged_user
+    except Exception as e:
+        if jid:
+            D.add_log(jid, qid, mid, "INFO", "SESSION",
+                      f"{hostname}: WMI failed ({e}), trying tasklist...")
+
+    # Method 3: find explorer.exe owner via tasklist
+    try:
+        r = subprocess.run(
+            ["tasklist", "/s", hostname, "/u", admin_username, "/p", admin_password,
+             "/fi", "imagename eq explorer.exe", "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and "explorer.exe" in r.stdout.lower():
+            # CSV format: "Image","PID","Session","Num","Mem"  — no username column here
+            # But if explorer.exe is running, the logged user is the configured user most likely
+            # Try with /v for verbose which includes username
+            r2 = subprocess.run(
+                ["tasklist", "/s", hostname, "/u", admin_username, "/p", admin_password,
+                 "/fi", "imagename eq explorer.exe", "/fo", "csv", "/v", "/nh"],
+                capture_output=True, text=True, timeout=15)
+            if r2.returncode == 0:
+                for line in r2.stdout.splitlines():
+                    if "explorer.exe" in line.lower():
+                        parts = [p.strip('"') for p in line.split('","')]
+                        # Verbose CSV: Image,PID,Session,Num,Mem,Status,Username,CPU,Window
+                        if len(parts) >= 7 and parts[6] and "\\" in parts[6]:
+                            logged_user = parts[6].split("\\")[-1].strip()
+                            if logged_user:
+                                if jid:
+                                    D.add_log(jid, qid, mid, "INFO", "SESSION",
+                                              f"{hostname}: active user = '{logged_user}' (via tasklist)")
+                                return logged_user
+    except Exception as e:
+        if jid:
+            D.add_log(jid, qid, mid, "INFO", "SESSION",
+                      f"{hostname}: tasklist failed ({e})")
+
+    if jid:
+        D.add_log(jid, qid, mid, "WARN", "SESSION",
+                  f"{hostname}: could not detect logged-in user via any method. "
+                  f"Will try running task as configured user '{plain_user}' with /it. "
+                  f"If macro fails, ensure the user is logged in and 'Remote Registry' + "
+                  f"'Remote Desktop Services' are enabled on {hostname}.")
     return None
 
 
@@ -777,13 +843,12 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
               f"Scheduling task on {hostname} ({mode}) ru='{ru_user}'")
 
     # ── Step 2: Attempt order ──
-    # 1. Detected/configured user + /it   (interactive, preferred)
-    # 2. Detected/configured user, no /it  (headless)
-    # 3. SYSTEM (always fires, last resort — VBS runs but Excel hidden)
+    # 1. Detected/configured user + /it   (interactive, preferred — Excel visible)
+    # 2. Detected/configured user, no /it  (headless — runs even without interactive session)
+    # NOTE: SYSTEM fallback REMOVED — SYSTEM has no desktop and cannot open Excel.
     create_attempts = [
         (True,  use_password, False, "interactive /it"),
         (False, use_password, False, "headless (no /it)"),
-        (False, False,        True,  "SYSTEM fallback"),
     ]
 
     task_created = False
@@ -817,49 +882,45 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Error triggering task: {e}")
         return False
 
-    # ── Step 4: Verify task actually started (critical fix) ──
-    # schtasks /run returns 0 even when /it task has no interactive session.
-    # The task stays in 'Ready' state and never fires. Detect this and retry.
-    time.sleep(3)  # give Windows a moment to start the task
+    # ── Step 4: Verify task actually started ──
+    # schtasks /run returns 0 even when /it has no interactive session.
+    # Task stays in 'Ready' and never fires. Detect this and retry.
+    # SYSTEM fallback REMOVED: SYSTEM has no desktop and cannot open Excel.
+    time.sleep(3)
     if not _task_is_running():
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                  f"Task appears stuck in Ready state on {hostname} "
-                  f"(created as [{used_label}], likely no interactive session for '{ru_user}'). "
-                  f"Retrying without /it...")
-        # Delete the stuck task and retry without /it, then with SYSTEM
+                  f"Task stuck in Ready on {hostname} "
+                  f"(created as [{used_label}], no interactive session for '{ru_user}'). "
+                  f"Retrying headless...")
         try:
             subprocess.run(_build_delete(), capture_output=True, timeout=10)
         except:
             pass
 
-        retry_attempts = [
-            (False, use_password, False, "headless retry"),
-            (False, False,        True,  "SYSTEM retry"),
-        ]
-        for with_it, with_pw, as_system, label in retry_attempts:
-            # Skip if we already tried this exact config
-            if not as_system and used_label == "headless (no /it)":
-                continue
-            create = _build_create(with_it, with_pw, as_system)
+        # Only retry headless if we haven't already tried it
+        if used_label == "interactive /it":
+            create = _build_create(False, use_password, False)
             r = subprocess.run(create, capture_output=True, text=True, timeout=30)
             if r.returncode == 0:
                 r2 = subprocess.run(_build_run(), capture_output=True, text=True, timeout=15)
                 if r2.returncode == 0:
                     time.sleep(3)
-                    if _task_is_running() or as_system:
+                    if _task_is_running():
                         D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                                  f"Task now running [{label}] on {hostname}")
+                                  f"Task running [headless retry] on {hostname}")
                         return True
-                    else:
-                        D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                                  f"[{label}] also stuck in Ready on {hostname}")
-            err = (r.stderr.strip() or r.stdout.strip())[:200]
-            D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                      f"Retry [{label}] failed: {err}")
+                    D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
+                              f"[headless retry] also stuck in Ready on {hostname}")
+            else:
+                err = (r.stderr.strip() or r.stdout.strip())[:200]
+                D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Headless retry create failed: {err}")
 
         D.add_log(jid, qid, mid, "ERROR", "SCHTASKS",
-                  f"{hostname}: task not running after all retries. "
-                  f"Check that Remote Scheduled Tasks Management firewall rule is enabled on {hostname}.")
+                  f"{hostname}: task not running after all attempts. "
+                  f"Excel requires an interactive user session — SYSTEM cannot open Excel. "
+                  f"FIX: ensure a user is logged in on {hostname}. "
+                  f"Enable Windows services: Remote Desktop Services, Remote Registry, Task Scheduler. "
+                  f"Firewall: allow Remote Scheduled Tasks Management.")
         return False
 
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
