@@ -17,8 +17,279 @@ import notifier as N
 COMPILED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compiled_output")
 _running_jobs = {}
 _kill_jobs = {}
-_job_executors = {}   # jid -> ThreadPoolExecutor (kept alive while job runs)
-_job_context = {}     # jid -> {excel_file, macro_name, target_cell, job_folder, group_name, compile_dir, files}
+_job_executors = {}   # jid -> {executor, machine_worker, active, lock, done}
+_job_context = {}     # jid -> {excel_file, macro_name, ...}
+
+
+def is_running(jid):
+    """Return True if job jid is currently executing in memory."""
+    return bool(_running_jobs.get(jid))
+
+
+def run_async(jid):
+    _running_jobs[jid] = True
+    _kill_jobs.pop(jid, None)
+    threading.Thread(target=_run_job, args=(jid,), daemon=True).start()
+
+
+def kill_job(jid):
+    _kill_jobs[jid] = True
+    D.add_log(jid, level="WARN", step="KILL", message=f"Kill signal for job #{jid}")
+    with D.db() as c:
+        c.execute("UPDATE job_queue SET status='CANCELLED' WHERE job_id=? AND status='QUEUED'", (jid,))
+
+
+def test_machine(mid):
+    """Test connectivity to a group machine. Returns list of (step, ok, message)."""
+    m = D.get_machine(mid)
+    if not m:
+        return [("LOAD", False, "Machine not found")]
+    results = test_machine_dict(dict(m))
+    ok_count = sum(1 for r in results if r[1])
+    fail_count = sum(1 for r in results if not r[1])
+    if ok_count and not fail_count:
+        status = "OK"
+    elif ok_count and fail_count:
+        status = "PARTIAL"
+    else:
+        status = "FAIL"
+    detail = " | ".join(f"{'OK' if r[1] else 'FAIL'} {r[0]}: {r[2]}" for r in results)
+    D.sync_health_to_master(m["machine_name"], status, detail)
+    return results
+
+
+
+# Test addon - will be appended to executor.py
+
+_test_job_results = {}
+
+
+def test_job_async(gid):
+    """Run a full pipeline validation for every machine in the group.
+    Tests: config, auth, folder create, VBS write, user detection, schtasks create+trigger, result polling.
+    Does NOT open Excel or run any macro."""
+    _test_job_results[gid] = []
+    threading.Thread(target=_run_test_job, args=(gid,), daemon=True).start()
+
+
+def get_test_results(gid):
+    return _test_job_results.get(gid, None)
+
+
+def clear_test_results(gid):
+    _test_job_results.pop(gid, None)
+
+
+def _make_test_vbs(result_filename):
+    """Minimal VBS that just writes SUCCESS — proves schtasks can execute scripts."""
+    return (
+        'Dim fso, scriptFolder, resultPath\n'
+        'Set fso = CreateObject("Scripting.FileSystemObject")\n'
+        'scriptFolder = fso.GetParentFolderName(WScript.ScriptFullName)\n'
+        'If Right(scriptFolder, 1) <> "\\\\" Then scriptFolder = scriptFolder & "\\\\"\n'
+        'resultPath = scriptFolder & "' + result_filename + '"\n'
+        'Call WriteR(resultPath, "SUCCESS:TEST_OK")\n'
+        'WScript.Quit 0\n'
+        '\n'
+        'Sub WriteR(p, m)\n'
+        '    Dim f\n'
+        '    Set f = CreateObject("Scripting.FileSystemObject").CreateTextFile(p, True)\n'
+        '    f.Write m\n'
+        '    f.Close\n'
+        'End Sub\n'
+    )
+
+
+def _cleanup_test(unc_folder, task_name=None, hostname=None, username=None, password=None):
+    if task_name and hostname:
+        try:
+            subprocess.run(
+                ["schtasks", "/delete", "/s", hostname, "/u", username,
+                 "/p", password, "/tn", task_name, "/f"],
+                capture_output=True, timeout=10)
+        except Exception:
+            pass
+    try:
+        if unc_folder and os.path.exists(unc_folder):
+            shutil.rmtree(unc_folder, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _run_test_job(gid):
+    results = _test_job_results[gid]
+
+    def log(mid, mname, step, ok, msg):
+        results.append({
+            "mid": mid, "machine": mname, "step": step,
+            "ok": ok, "msg": msg,
+            "ts": datetime.now().strftime("%H:%M:%S")
+        })
+
+    try:
+        machines = [dict(m) for m in D.get_machines(gid) if m["is_active"]]
+        g = D.get_group(gid)
+        if not machines:
+            log(0, "—", "INIT", False, "No active machines in group")
+            results.append({"done": True})
+            return
+
+        job_folder = "test_{}_{}".format(gid, int(datetime.now().timestamp()))
+        log(0, "ALL", "START", True,
+            "Testing {} machine(s) in group '{}'".format(len(machines), g["group_name"]))
+
+        def test_one(m):
+            mid = m["machine_id"]
+            mname = m["machine_name"]
+            hostname = (m.get("system_name") or "").strip()
+            username = (m.get("username") or "").strip()
+            password = (m.get("password") or "").strip()
+            remote_path = (m.get("remote_path") or "").strip()
+            shared = (m.get("shared_folder") or "").strip()
+
+            # Step 1: Config
+            missing = [k for k, v in [
+                ("System Name", hostname), ("Remote Path", remote_path),
+                ("Username", username), ("Password", password), ("Shared Folder", shared)
+            ] if not v]
+            if missing:
+                log(mid, mname, "CONFIG", False, "Missing fields: " + ", ".join(missing))
+                return
+            log(mid, mname, "CONFIG", True,
+                "hostname={}, remote_path={}".format(hostname, remote_path))
+
+            # Step 2: Auth
+            unc_folder = os.path.join(shared, job_folder)
+            auth_ok = _net_use_auth(shared, username, password)
+            if not auth_ok:
+                log(mid, mname, "AUTH", False,
+                    "Cannot authenticate to {} — check username/password".format(shared))
+                return
+            log(mid, mname, "AUTH", True, "Authenticated to {}".format(shared))
+
+            # Step 3: Create folder
+            try:
+                os.makedirs(unc_folder, exist_ok=True)
+                log(mid, mname, "MKDIR", True, "Folder created: {}".format(unc_folder))
+            except Exception as e:
+                log(mid, mname, "MKDIR", False,
+                    "Cannot create folder: {} — fix share write permissions".format(e))
+                return
+
+            # Step 4: Write test VBS
+            vbs_name = "_test_run.vbs"
+            result_name = "_test_result.txt"
+            vbs_unc = os.path.join(unc_folder, vbs_name)
+            result_unc = os.path.join(unc_folder, result_name)
+            local_vbs = os.path.join(remote_path, job_folder, vbs_name)
+            try:
+                with open(vbs_unc, "w", encoding="utf-8") as f:
+                    f.write(_make_test_vbs(result_name))
+                log(mid, mname, "VBS_WRITE", True, "Test VBS written to share")
+            except Exception as e:
+                log(mid, mname, "VBS_WRITE", False, "Cannot write VBS: {}".format(e))
+                _cleanup_test(unc_folder)
+                return
+
+            # Step 5: Detect active user
+            detected = _get_active_session_user(hostname, username, password)
+            if detected:
+                ru_user = detected.split("\\")[-1].strip()
+                log(mid, mname, "SESSION", True,
+                    "Active user: '{}' — schtasks will run in their session".format(ru_user))
+            else:
+                ru_user = username.split("\\")[-1] if "\\" in username else username
+                log(mid, mname, "SESSION", False,
+                    "No active session detected — will try as '{}'. "
+                    "Enable Remote Desktop Services + Remote Registry on {}.".format(ru_user, hostname))
+
+            # Step 6: Create + trigger schtask
+            task_name = "MQ_TEST_{}_{}".format(gid, mid)
+            task_cmd = 'cscript //NoLogo "{}"'.format(local_vbs)
+            plain_ru = ru_user
+            created = False
+            last_err = ""
+            for use_it in (True, False):
+                create_cmd = [
+                    "schtasks", "/create", "/s", hostname,
+                    "/u", username, "/p", password,
+                    "/tn", task_name, "/tr", task_cmd,
+                    "/sc", "once", "/st", "00:00", "/f", "/rl", "highest",
+                    "/ru", plain_ru
+                ]
+                if not detected:
+                    create_cmd += ["/rp", password]
+                if use_it:
+                    create_cmd.append("/it")
+                r = subprocess.run(create_cmd, capture_output=True, text=True, timeout=30)
+                if r.returncode == 0:
+                    mode = "interactive /it" if use_it else "headless"
+                    log(mid, mname, "SCHTASKS", True,
+                        "Task created [{}] on {} as '{}'".format(mode, hostname, plain_ru))
+                    created = True
+                    break
+                last_err = (r.stderr.strip() or r.stdout.strip())[:200]
+
+            if not created:
+                log(mid, mname, "SCHTASKS", False,
+                    "Cannot create task: {}".format(last_err))
+                _cleanup_test(unc_folder, task_name, hostname, username, password)
+                return
+
+            run_cmd = ["schtasks", "/run", "/s", hostname,
+                       "/u", username, "/p", password, "/tn", task_name]
+            r2 = subprocess.run(run_cmd, capture_output=True, text=True, timeout=15)
+            if r2.returncode != 0:
+                err = (r2.stderr.strip() or r2.stdout.strip())[:200]
+                log(mid, mname, "SCHTASKS", False, "Trigger failed: {}".format(err))
+                _cleanup_test(unc_folder, task_name, hostname, username, password)
+                return
+
+            # Step 7: Poll result (max 60s)
+            log(mid, mname, "WAITING", True, "Task triggered — polling result file (max 60s)…")
+            deadline = time.time() + 60
+            result_text = None
+            while time.time() < deadline:
+                time.sleep(2)
+                try:
+                    if os.path.exists(result_unc):
+                        t = open(result_unc, "r", encoding="utf-8").read().strip()
+                        if t:
+                            result_text = t
+                            break
+                except Exception:
+                    pass
+
+            _cleanup_test(unc_folder, task_name, hostname, username, password)
+
+            if result_text and result_text.startswith("SUCCESS"):
+                log(mid, mname, "RESULT", True,
+                    "ALL STEPS PASSED — full pipeline works on {}. "
+                    "Real macro jobs will execute correctly on this machine.".format(hostname))
+            elif result_text:
+                log(mid, mname, "RESULT", False,
+                    "Script ran but returned: {}".format(result_text))
+            else:
+                log(mid, mname, "RESULT", False,
+                    "TIMEOUT — VBS was written and task triggered but no result in 60s. "
+                    "Check: is remote_path '{}' correct on {}? "
+                    "Is schtasks actually running the VBS?".format(remote_path, hostname))
+
+        with ThreadPoolExecutor(max_workers=min(len(machines), 8)) as pool:
+            futs = [pool.submit(test_one, m) for m in machines]
+            for fut in as_completed(futs):
+                try:
+                    fut.result()
+                except Exception as e:
+                    log(0, "?", "ERROR", False, str(e))
+
+    except Exception as e:
+        results.append({
+            "mid": 0, "machine": "—", "step": "CRASH", "ok": False,
+            "msg": "Test crashed: {}".format(e), "ts": datetime.now().strftime("%H:%M:%S")
+        })
+    finally:
+        results.append({"done": True})
 
 
 def add_machine_to_job(jid, mid):
@@ -36,12 +307,9 @@ def add_machine_to_job(jid, mid):
             D.add_log(jid, machine_id=mid, level="INFO", step="ADD_MACHINE",
                       message=f"Hot-adding {m['machine_name']} to running job #{jid}")
             unc_folder = _prep_machine(dict(m), ctx["job_folder"], ctx["files"], jid)
-
-            # Increment active worker count BEFORE launching
             with ex_info["lock"]:
                 ex_info["active"][0] += 1
-                ex_info["done"].clear()  # job not done yet
-
+                ex_info["done"].clear()
             mw = ex_info["machine_worker"]
             def _tracked():
                 try:
@@ -51,10 +319,9 @@ def add_machine_to_job(jid, mid):
                         ex_info["active"][0] -= 1
                         if ex_info["active"][0] <= 0:
                             ex_info["done"].set()
-
             ex_info["executor"].submit(_tracked)
             D.add_log(jid, machine_id=mid, level="INFO", step="ADD_MACHINE",
-                      message=f"{m['machine_name']} worker started — will pick up QUEUED categories")
+                      message=f"{m['machine_name']} worker started — picking up QUEUED categories")
         except Exception as e:
             D.add_log(jid, machine_id=mid, level="ERROR", step="ADD_MACHINE",
                       message=f"Failed to add {m['machine_name']}: {e}")
@@ -62,42 +329,6 @@ def add_machine_to_job(jid, mid):
     import threading as _t
     _t.Thread(target=_do_add, daemon=True).start()
     return True, f"Adding {m['machine_name']} to job — prep in progress"
-
-
-
-
-
-def kill_job(jid):
-    _kill_jobs[jid] = True
-    D.add_log(jid, level="WARN", step="KILL", message=f"Kill signal for job #{jid}")
-    with D.db() as c:
-        c.execute("UPDATE job_queue SET status='CANCELLED' WHERE job_id=? AND status='QUEUED'", (jid,))
-
-
-def run_async(jid):
-    _running_jobs[jid] = True
-    _kill_jobs.pop(jid, None)
-    threading.Thread(target=_run_job, args=(jid,), daemon=True).start()
-
-
-def test_machine(mid):
-    """Test connectivity to a group machine. Returns list of (step, ok, message)."""
-    m = D.get_machine(mid)
-    if not m:
-        return [("LOAD", False, "Machine not found")]
-    results = test_machine_dict(dict(m))
-    # Sync health result back to master record (if this machine exists in master by name)
-    ok_count = sum(1 for r in results if r[1])
-    fail_count = sum(1 for r in results if not r[1])
-    if ok_count and not fail_count:
-        status = "OK"
-    elif ok_count and fail_count:
-        status = "PARTIAL"
-    else:
-        status = "FAIL"
-    detail = " | ".join(f"{'OK' if r[1] else 'FAIL'} {r[0]}: {r[2]}" for r in results)
-    D.sync_health_to_master(m["machine_name"], status, detail)
-    return results
 
 
 def test_machine_dict(m):

@@ -433,7 +433,25 @@ async def import_cats(gid: int, file: UploadFile = File(...)):
 
 # ── JOBS ────────────────────────────────────────────────────────────────────
 
-@app.post("/api/groups/{gid}/run")
+@app.post("/api/groups/{gid}/test-job")
+async def start_test_job(gid: int):
+    """Start a pipeline validation test for all machines in the group."""
+    g = D.get_group(gid)
+    if not g: raise HTTPException(404)
+    E.clear_test_results(gid)
+    E.test_job_async(gid)
+    return JSONResponse({"ok": True, "message": f"Test started for group '{g['group_name']}'"})
+
+@app.get("/api/groups/{gid}/test-job")
+async def get_test_job_results(gid: int):
+    """Poll test job results."""
+    results = E.get_test_results(gid)
+    if results is None:
+        return JSONResponse({"running": False, "results": [], "done": False})
+    done = any(r.get("done") for r in results)
+    rows = [r for r in results if not r.get("done")]
+    return JSONResponse({"running": not done, "done": done, "results": rows})
+
 async def run_job(gid: int):
     g = D.get_group(gid)
     if not g: raise HTTPException(404)
