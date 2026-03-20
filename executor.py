@@ -207,9 +207,18 @@ def _run_test_job(gid):
             task_name = "MQ_TEST_{}_{}".format(gid, mid)
             task_cmd = 'cscript //NoLogo "{}"'.format(local_vbs)
             plain_ru = ru_user
+
+            # Key rule: only use /it if we actually detected an active session.
+            # /it with no session = task created OK, triggered OK, but silently never runs.
+            attempts = []
+            if detected:
+                attempts.append((True,  False, "interactive /it"))   # user session exists
+            attempts.append((False, not bool(detected), "headless")) # always include as fallback
+
             created = False
+            used_mode = ""
             last_err = ""
-            for use_it in (True, False):
+            for use_it, use_rp, mode_label in attempts:
                 create_cmd = [
                     "schtasks", "/create", "/s", hostname,
                     "/u", username, "/p", password,
@@ -217,25 +226,26 @@ def _run_test_job(gid):
                     "/sc", "once", "/st", "00:00", "/f", "/rl", "highest",
                     "/ru", plain_ru
                 ]
-                if not detected:
+                if use_rp:
                     create_cmd += ["/rp", password]
                 if use_it:
                     create_cmd.append("/it")
                 r = subprocess.run(create_cmd, capture_output=True, text=True, timeout=30)
                 if r.returncode == 0:
-                    mode = "interactive /it" if use_it else "headless"
                     log(mid, mname, "SCHTASKS", True,
-                        "Task created [{}] on {} as '{}'".format(mode, hostname, plain_ru))
+                        "Task created [{}] on {} as '{}'".format(mode_label, hostname, plain_ru))
                     created = True
+                    used_mode = mode_label
                     break
                 last_err = (r.stderr.strip() or r.stdout.strip())[:200]
 
             if not created:
                 log(mid, mname, "SCHTASKS", False,
-                    "Cannot create task: {}".format(last_err))
+                    "Cannot create task on {}: {}".format(hostname, last_err))
                 _cleanup_test(unc_folder, task_name, hostname, username, password)
                 return
 
+            # Trigger
             run_cmd = ["schtasks", "/run", "/s", hostname,
                        "/u", username, "/p", password, "/tn", task_name]
             r2 = subprocess.run(run_cmd, capture_output=True, text=True, timeout=15)
@@ -244,6 +254,59 @@ def _run_test_job(gid):
                 log(mid, mname, "SCHTASKS", False, "Trigger failed: {}".format(err))
                 _cleanup_test(unc_folder, task_name, hostname, username, password)
                 return
+
+            # Verify task is actually Running (not stuck in Ready)
+            # schtasks /run returns 0 even when /it has no active session
+            time.sleep(3)
+            try:
+                qcmd = ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password,
+                        "/tn", task_name, "/fo", "csv", "/nh"]
+                qr = subprocess.run(qcmd, capture_output=True, text=True, timeout=15)
+                task_actually_running = qr.returncode == 0 and "Running" in qr.stdout
+            except Exception:
+                task_actually_running = True  # can't query, assume OK
+
+            if not task_actually_running and used_mode == "interactive /it":
+                # Stuck in Ready — /it has no session. Delete and retry headless.
+                log(mid, mname, "SCHTASKS", False,
+                    "Task stuck in Ready on {} — '{}' has no interactive session. "
+                    "Retrying headless (no /it)…".format(hostname, plain_ru))
+                try:
+                    subprocess.run(
+                        ["schtasks", "/delete", "/s", hostname, "/u", username, "/p", password,
+                         "/tn", task_name, "/f"],
+                        capture_output=True, timeout=10)
+                except Exception:
+                    pass
+
+                # Headless retry
+                create_hl = [
+                    "schtasks", "/create", "/s", hostname,
+                    "/u", username, "/p", password,
+                    "/tn", task_name, "/tr", task_cmd,
+                    "/sc", "once", "/st", "00:00", "/f", "/rl", "highest",
+                    "/ru", plain_ru, "/rp", password
+                ]
+                rhl = subprocess.run(create_hl, capture_output=True, text=True, timeout=30)
+                if rhl.returncode != 0:
+                    err = (rhl.stderr.strip() or rhl.stdout.strip())[:200]
+                    log(mid, mname, "SCHTASKS", False,
+                        "Headless retry also failed: {}. "
+                        "Check firewall: allow 'Remote Scheduled Tasks Management' on {}.".format(err, hostname))
+                    _cleanup_test(unc_folder, task_name, hostname, username, password)
+                    return
+
+                r3 = subprocess.run(run_cmd, capture_output=True, text=True, timeout=15)
+                if r3.returncode != 0:
+                    err = (r3.stderr.strip() or r3.stdout.strip())[:200]
+                    log(mid, mname, "SCHTASKS", False, "Headless trigger failed: {}".format(err))
+                    _cleanup_test(unc_folder, task_name, hostname, username, password)
+                    return
+                log(mid, mname, "SCHTASKS", True,
+                    "Task now running [headless] on {} as '{}'".format(hostname, plain_ru))
+            else:
+                log(mid, mname, "SCHTASKS", True,
+                    "Task confirmed running on {} [{}]".format(hostname, used_mode))
 
             # Step 7: Poll result (max 60s)
             log(mid, mname, "WAITING", True, "Task triggered — polling result file (max 60s)…")
