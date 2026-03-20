@@ -737,9 +737,11 @@ document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 
 {# Add Machine Modal #}
 <div class="mo-bg" id="addMachineToJobMo" onclick="if(event.target===this)this.classList.remove('show')">
-<div class="mo" style="width:480px"><h3>Add Machine to Running Job</h3>
+<div class="mo" style="width:500px"><h3>Add Machine to Running Job</h3>
 <p style="font-size:12px;color:var(--tx3);margin-bottom:14px">
-Select a machine from this group to add to the running job. It will be prepped (files copied) and immediately start picking up <strong>QUEUED</strong> categories. Useful when a machine finishes early or you have leftover queued items.
+  Machines below are <strong>already tagged to this group</strong> but not currently processing a category in this job.
+  Click <strong>+ Add to Job</strong> to prep the machine (auth + copy files) and start it picking up <strong>QUEUED</strong> categories immediately.<br><br>
+  <span style="color:var(--warn)">Note: machines are only removed from this job's active execution — they remain tagged to the group.</span>
 </p>
 <div id="addMachList" style="max-height:280px;overflow-y:auto;border:1px solid var(--bdr);border-radius:6px;margin-bottom:12px">
 <div class="empty">Loading available machines…</div>
@@ -826,7 +828,7 @@ function actionCell(qi){
   if(qi.status==='RUNNING'&&qi.machine_id){
     btns.push(`<button class="btn btn-s" style="color:var(--err);border:1px solid var(--err);background:transparent;margin-left:4px"
       onclick="removeMachine(${qi.machine_id},'${(qi.machine||'').replace(/'/g,"\\'")}')"
-      title="Remove machine — QUEUED items return to pool">⊟ Remove</button>`);
+      title="Release from this job only — machine stays in group, QUEUED items return to pool">⊟ Release</button>`);
   }
   return btns.join('');
 }
@@ -882,9 +884,9 @@ async function poll(){
 async function removeMachine(mid,mname){
   const free=_freeMachines.filter(m=>m.id!==mid);
   const freeList=free.length?free.map(m=>m.name).join(', '):'none right now';
-  if(!confirm(`Remove machine "${mname}" from this job?\n\nQueued categories will return to pool.\nFree machines: ${freeList}\n\nProceed?`))return;
+  if(!confirm(`Release "${mname}" from this job?\n\n• QUEUED categories assigned to it return to pool\n• Machine STAYS in the group (not untagged)\n• Other free machines will pick up the returned categories\n• You can re-add it to another running job at any time\n\nFree machines in this job: ${freeList}\n\nProceed?`))return;
   await fetch('/api/jobs/'+JID+'/remove-machine/'+mid,{method:'POST'});
-  toast('Machine removed — queued items back in pool','ok');
+  toast(mname+' released — queued items back in pool, machine stays in group','ok');
 }
 
 async function openAddMachine(){
@@ -896,16 +898,18 @@ async function openAddMachine(){
     const r=await fetch('/api/jobs/'+JID+'/available-machines');
     const d=await r.json();
     if(!d.machines||!d.machines.length){
-      list.innerHTML='<div class="empty">No available machines — all active machines in this group are already working this job.<br><br>Add more machines to the group first via the Group page, then come back here.</div>';
+      list.innerHTML='<div class="empty" style="padding:20px;text-align:center">All machines in this group are currently active in this job.<br><br>To use a machine from another group, first add it to this group via the Group page.</div>';
       return;
     }
     list.innerHTML=d.machines.map(m=>`
       <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--bdr)">
         <div>
           <span style="font-weight:600;font-size:13px">${m.name}</span>
-          <span style="color:var(--tx3);font-size:11px;margin-left:8px">${m.system||''}</span>
+          <span style="color:var(--tx3);font-size:11px;margin-left:6px">${m.system||''}</span>
+          ${m.active_user?`<span style="color:var(--ok);font-size:10.5px;margin-left:8px">👤 ${m.active_user}</span>`:''}
+          <span style="color:var(--tx3);font-size:10px;margin-left:8px">(tagged to this group)</span>
         </div>
-        <button class="btn btn-p btn-s" onclick="addMachine(${m.id},'${m.name.replace(/'/g,"\\'")}',this)">+ Add</button>
+        <button class="btn btn-p btn-s" onclick="addMachine(${m.id},'${m.name.replace(/'/g,String.fromCharCode(92,39))}',this)">+ Add to Job</button>
       </div>`).join('');
   }catch(e){list.innerHTML=`<div class="empty" style="color:var(--err)">Error: ${e.message}</div>`;}
 }

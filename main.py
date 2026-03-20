@@ -437,6 +437,15 @@ async def import_cats(gid: int, file: UploadFile = File(...)):
 async def run_job(gid: int):
     g = D.get_group(gid)
     if not g: raise HTTPException(404)
+    # ONE JOB PER GROUP: block if any job is already running for this group
+    running_jids = D.get_running_job_ids_for_group(gid)
+    actually_running = [j for j in running_jids if E.is_running(j)]
+    if actually_running:
+        raise HTTPException(400, f"Group '{g['group_name']}' already has job #{actually_running[0]} running. "
+                            f"Only one job per group at a time. Kill it first or wait for it to finish.")
+    # Auto-fix stale RUNNING records from previous crashes
+    if running_jids and not actually_running:
+        D.fix_stale_running_jobs(set())
     files = D.get_files(gid)
     machines = [m for m in D.get_machines(gid) if m["is_active"]]
     cats = D.get_categories(gid)
@@ -445,10 +454,10 @@ async def run_job(gid: int):
     if not cats: raise HTTPException(400, "No categories defined")
     if not g["macro_name"]: raise HTTPException(400, "Macro name not configured in group settings")
     if not g["excel_file_name"]: raise HTTPException(400, "Excel file not set in group settings")
-
     jid = D.create_job(gid)
     E.run_async(jid)
     return RedirectResponse(f"/jobs/{jid}", 303)
+
 
 @app.get("/api/jobs/{jid}/status")
 async def job_status(jid: int):
@@ -499,21 +508,34 @@ async def add_machine_to_running_job(jid: int, mid: int):
 
 @app.get("/api/jobs/{jid}/available-machines")
 async def available_machines_for_job(jid: int):
-    """Return machines in this job's group that are active but not yet working this job."""
+    """Return machines in this job's group that are active but NOT currently
+    running categories in this specific job. These can be added to pick up QUEUED items."""
     j = D.get_job(jid)
     if not j: raise HTTPException(404)
     with D.db() as c:
-        # Machines already involved in this job (assigned to any queue item)
-        busy = {r["machine_id"] for r in c.execute(
-            "SELECT DISTINCT machine_id FROM job_queue WHERE job_id=? AND machine_id IS NOT NULL", (jid,)).fetchall()}
+        # Machines that are currently RUNNING a category in this job
+        active_in_job = {r["machine_id"] for r in c.execute(
+            "SELECT DISTINCT machine_id FROM job_queue "
+            "WHERE job_id=? AND status='RUNNING' AND machine_id IS NOT NULL", (jid,)).fetchall()}
+        # All active machines in the group
         all_machines = c.execute(
-            "SELECT * FROM machines WHERE group_id=? AND is_active=1", (j["group_id"],)).fetchall()
-    available = [{"id": m["machine_id"], "name": m["machine_name"],
-                  "system": m["system_name"] or ""} for m in all_machines if m["machine_id"] not in busy]
+            "SELECT * FROM machines WHERE group_id=? AND is_active=1 ORDER BY machine_name",
+            (j["group_id"],)).fetchall()
+    available = []
+    for m in all_machines:
+        if m["machine_id"] not in active_in_job:
+            available.append({
+                "id": m["machine_id"],
+                "name": m["machine_name"],
+                "system": m["system_name"] or "",
+                "active_user": m["active_user"] or "",
+            })
     return JSONResponse({"machines": available})
 
+@app.post("/api/jobs/{jid}/remove-machine/{mid}")
 async def remove_machine_from_job(jid: int, mid: int):
-    """Remove a machine from a running job — its QUEUED items return to pool."""
+    """Remove a machine from a running job — its QUEUED items return to pool.
+    Machine stays in the group and can be added to another running job."""
     if not E.is_running(jid):
         raise HTTPException(400, "Job is not running")
     m = D.get_machine(mid)
@@ -521,7 +543,8 @@ async def remove_machine_from_job(jid: int, mid: int):
         raise HTTPException(404)
     D.remove_machine_from_job(jid, mid)
     D.add_log(jid, machine_id=mid, level="WARN", step="MACHINE_REMOVED",
-              message=f"Machine '{m['machine_name']}' removed from job by user — queued items returned to pool")
+              message=f"Machine '{m['machine_name']}' released from job #{jid} by user — "
+                      f"QUEUED items returned to pool. Machine remains in group.")
     return RedirectResponse(f"/jobs/{jid}", 303)
 
 @app.get("/api/jobs/{jid}/live")
