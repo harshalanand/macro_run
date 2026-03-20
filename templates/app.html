@@ -624,15 +624,20 @@ function filterJobs(q){
 document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 </script>
 
+
 {# ═══ JOB DETAIL ═══ #}
 {% elif page=='jdetail' %}
 <div class="top"><h2>Job #{{j.job_id}} &mdash; {{j.group_name}}</h2>
 <div class="act">
 <span class="mono" style="color:var(--tx3);font-size:11px">{{j.job_date}}</span>
 <span id="jbadge">{% if j.status=='COMPLETED' %}<span class="badge b-ok">DONE</span>{% elif j.status=='RUNNING' %}<span class="badge b-blue pulse">RUNNING</span>{% elif j.status=='KILLED' %}<span class="badge b-err">KILLED</span>{% elif 'ERROR' in j.status %}<span class="badge b-warn">PARTIAL</span>{% else %}<span class="badge b-err">{{j.status}}</span>{% endif %}</span>
-{% if j.status=='RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/kill" style="display:inline"><button class="btn btn-r btn-s" onclick="return confirm('Kill this job?')">Kill Job</button></form>{% endif %}
+{% if j.status=='RUNNING' %}
+<button class="btn btn-o btn-s" onclick="openAddMachine()" title="Add a machine to this running job to process remaining queued categories">+ Add Machine</button>
+<form method="post" action="/api/jobs/{{j.job_id}}/kill" style="display:inline"><button class="btn btn-r btn-s" onclick="return confirm('Kill this job?')">Kill Job</button></form>
+{% endif %}
 {% if j.status != 'RUNNING' %}<form method="post" action="/api/jobs/{{j.job_id}}/delete" style="display:inline" onsubmit="return confirm('Delete Job #{{j.job_id}} permanently?')"><button class="btn btn-o btn-s" style="color:var(--err);border-color:var(--err)">Delete Job</button></form>{% endif %}
 </div></div>
+
 <div class="ct">
 <div class="sg" style="margin-bottom:14px">
 <div class="st"><div class="lb">Total</div><div class="vl" id="st_total">{{j.total_cats}}</div></div>
@@ -640,45 +645,64 @@ document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 <div class="st"><div class="lb">Failed</div><div class="vl r" id="st_fail">{{j.failed_cats}}</div></div>
 <div class="st"><div class="lb">Queued</div><div class="vl b" id="st_queued">{{queue|selectattr('status','eq','QUEUED')|list|length}}</div></div>
 </div>
-{% if j.status=='RUNNING' %}
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;font-size:11px">
-<span style="font-weight:600;color:var(--tx2)">STAGES:</span>
-<span class="tag">&#9634; QUEUED</span>
-<span style="color:var(--blue);font-family:monospace">AUTH</span><span style="color:var(--tx3)">&#8594;</span>
-<span style="color:var(--blue);font-family:monospace">COPY</span><span style="color:var(--tx3)">&#8594;</span>
-<span style="color:var(--ac2);font-family:monospace">SESSION</span><span style="color:var(--tx3)">&#8594;</span>
-<span style="color:var(--ac2);font-family:monospace">SCHTASKS</span><span style="color:var(--tx3)">&#8594;</span>
-<span style="color:var(--warn);font-family:monospace">&#9203; WAITING</span><span style="color:var(--tx3)">&#8594;</span>
-<span style="color:var(--blue);font-family:monospace">COLLECT</span><span style="color:var(--tx3)">&#8594;</span>
-<span style="color:var(--ok);font-family:monospace">&#10003; DONE</span>
+
+{# Stage legend #}
+<div style="background:var(--bg2);border:1px solid var(--bdr);border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:11px">
+<div style="font-weight:600;color:var(--tx2);margin-bottom:6px">EXECUTION STAGES (per category)</div>
+<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+<span style="background:var(--bg4);border-radius:4px;padding:2px 7px;color:var(--tx3)">⬜ Queued</span><span style="color:var(--tx3)">→</span>
+<span style="background:rgba(116,185,255,.15);border-radius:4px;padding:2px 7px;color:#74b9ff">🔒 Auth</span><span style="color:var(--tx3)">→</span>
+<span style="background:rgba(116,185,255,.15);border-radius:4px;padding:2px 7px;color:#74b9ff">📋 Copy files</span><span style="color:var(--tx3)">→</span>
+<span style="background:rgba(162,155,254,.15);border-radius:4px;padding:2px 7px;color:#a29bfe">👤 Detect user</span><span style="color:var(--tx3)">→</span>
+<span style="background:rgba(162,155,254,.15);border-radius:4px;padding:2px 7px;color:#a29bfe">⚙ Schedule task</span><span style="color:var(--tx3)">→</span>
+<span style="background:rgba(253,203,110,.15);border-radius:4px;padding:2px 7px;color:#fdcb6e">⏳ Macro running</span><span style="color:var(--tx3)">→</span>
+<span style="background:rgba(116,185,255,.15);border-radius:4px;padding:2px 7px;color:#74b9ff">📦 Collect output</span><span style="color:var(--tx3)">→</span>
+<span style="background:rgba(0,184,148,.15);border-radius:4px;padding:2px 7px;color:#00b894">✓ Done</span>
 </div>
-{% endif %}
+</div>
+
+{# Category Queue #}
 <div class="card" style="padding:0;overflow:hidden">
 <div style="padding:12px 18px 10px;border-bottom:1px solid var(--bdr);display:flex;justify-content:space-between;align-items:center">
 <h3 style="margin:0">Category Queue</h3>
-{% if j.status=='RUNNING' %}<span style="font-size:11px;color:var(--tx3)">Live — updates every 4s</span>{% endif %}
+<span style="font-size:11px;color:var(--tx3)">{% if j.status=='RUNNING' %}Live — updates every 4s{% endif %}</span>
 </div>
 <div style="overflow-x:auto">
-<table id="queueTable" style="table-layout:fixed;width:100%;min-width:780px">
-<colgroup><col style="width:145px"><col style="width:95px"><col style="width:105px"><col style="width:120px"><col style="width:165px"><col style="width:70px"><col style="width:auto"></colgroup>
-<thead><tr><th>Category</th><th>Machine</th><th>Active User</th><th>Status</th><th>Current Step</th><th>Duration</th><th id="qActHeader">Error</th></tr></thead>
+<table id="queueTable" style="table-layout:fixed;width:100%;min-width:820px">
+<colgroup>
+  <col style="width:130px"><!-- category -->
+  <col style="width:75px"> <!-- machine -->
+  <col style="width:110px"><!-- active user -->
+  <col style="width:260px"><!-- stage pipeline -->
+  <col style="width:65px"> <!-- duration -->
+  <col style="width:auto"> <!-- actions/error -->
+</colgroup>
+<thead><tr>
+<th>Category</th>
+<th>Machine</th>
+<th>Active User</th>
+<th>Stage Progress</th>
+<th>Time</th>
+<th id="qActHeader">{% if j.status=='RUNNING' %}Actions{% else %}Error{% endif %}</th>
+</tr></thead>
 <tbody id="queueBody">
 {% for q in queue %}
 <tr id="qrow_{{q.queue_id}}">
 <td><span class="tag" style="font-size:12px">{{q.cat_value}}</span></td>
-<td style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="qm_{{q.queue_id}}">{{q.machine_name or '&#8212;'}}</td>
-<td id="qu_{{q.queue_id}}" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-  <span style="color:var(--tx3)">&#8212;</span>
+<td style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="qm_{{q.queue_id}}">{{q.machine_name or '—'}}</td>
+<td id="qu_{{q.queue_id}}" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="color:var(--tx3)">—</span></td>
+<td id="qpipe_{{q.queue_id}}">
+  {% if q.status=='SUCCESS' %}
+  <div style="display:flex;gap:2px;align-items:center;flex-wrap:nowrap">
+    {% for s in ['Auth','Copy','User','Task','Macro','Collect'] %}<span style="background:rgba(0,184,148,.2);color:#00b894;border-radius:3px;padding:1px 5px;font-size:9px">✓</span>{% endfor %}
+    <span style="background:rgba(0,184,148,.2);color:#00b894;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:600">✓ DONE</span>
+  </div>
+  {% elif q.status=='FAILED' %}<span class="badge b-err" style="font-size:10px">✗ Failed</span>
+  {% elif q.status=='CANCELLED' %}<span class="badge b-warn" style="font-size:10px">⊘ Cancelled</span>
+  {% elif q.status=='QUEUED' %}<span style="color:var(--tx3);font-size:10.5px">⬜ Waiting for machine</span>
+  {% else %}<span style="color:var(--tx3);font-size:10.5px">Starting…</span>{% endif %}
 </td>
-<td id="qs_{{q.queue_id}}">
-  {% if q.status=='SUCCESS' %}<span class="badge b-ok">&#10003; OK</span>
-  {% elif q.status=='RUNNING' %}<span class="badge b-blue pulse">&#9654; RUN</span>
-  {% elif q.status=='QUEUED' %}<span class="badge b-gray">&#9634; QUEUED</span>
-  {% elif q.status=='CANCELLED' %}<span class="badge b-warn">&#8856; CANCEL</span>
-  {% else %}<span class="badge b-err">&#10007; FAIL</span>{% endif %}
-</td>
-<td id="qstep_{{q.queue_id}}" style="font-size:11px;color:var(--tx3)">&#8212;</td>
-<td class="mono" id="qdur_{{q.queue_id}}">{{"%.1f"|format(q.duration_secs)~'s' if q.duration_secs else '&#8212;'}}</td>
+<td class="mono" id="qdur_{{q.queue_id}}" style="font-size:11px">{{"%.1f"|format(q.duration_secs)~'s' if q.duration_secs else '—'}}</td>
 <td id="qact_{{q.queue_id}}" style="font-size:11px;color:var(--err)">{{q.error_message[:80] if q.error_message else ''}}</td>
 </tr>
 {% endfor %}
@@ -686,14 +710,16 @@ document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 </table>
 </div>
 </div>
+
+{# Execution Log #}
 <div class="card" style="margin-top:12px">
 <div class="fx mb" style="justify-content:space-between">
 <h3 style="margin:0">Execution Log</h3>
 <form method="post" action="/api/logs/clear/{{j.job_id}}" style="display:inline"><button class="btn btn-o btn-s" style="color:var(--err)" onclick="return confirm('Clear logs?')">Clear Logs</button></form>
 </div>
-<div id="logBox" style="max-height:340px;overflow-y:auto">
+<div id="logBox" style="max-height:320px;overflow-y:auto">
 <table class="lt" style="table-layout:fixed;width:100%">
-<colgroup><col style="width:72px"><col style="width:48px"><col style="width:80px"><col style="width:100px"><col style="width:auto"></colgroup>
+<colgroup><col style="width:70px"><col style="width:46px"><col style="width:75px"><col style="width:95px"><col style="width:auto"></colgroup>
 <thead><tr><th>Time</th><th>Lvl</th><th>Machine</th><th>Step</th><th>Message</th></tr></thead>
 <tbody id="logBody">
 {% for l in logs %}<tr>
@@ -709,67 +735,98 @@ document.addEventListener('DOMContentLoaded',()=>filterJobs(''));
 </div>
 </div>
 
+{# Add Machine Modal #}
+<div class="mo-bg" id="addMachineToJobMo" onclick="if(event.target===this)this.classList.remove('show')">
+<div class="mo" style="width:480px"><h3>Add Machine to Running Job</h3>
+<p style="font-size:12px;color:var(--tx3);margin-bottom:14px">
+Select a machine from this group to add to the running job. It will be prepped (files copied) and immediately start picking up <strong>QUEUED</strong> categories. Useful when a machine finishes early or you have leftover queued items.
+</p>
+<div id="addMachList" style="max-height:280px;overflow-y:auto;border:1px solid var(--bdr);border-radius:6px;margin-bottom:12px">
+<div class="empty">Loading available machines…</div>
+</div>
+<div class="fx" style="justify-content:flex-end;gap:6px">
+<button class="btn btn-o" onclick="$('addMachineToJobMo').classList.remove('show')">Close</button>
+</div>
+</div></div>
+
 {% if j.status=='RUNNING' %}
 <script>
 const JID={{j.job_id}};
 let _freeMachines=[];
-let _machineUsers={};  // machine_id -> username for display on completed rows
+let _machineUsers={};
 
-// Human-readable step labels
-const STEP_LABELS = {
-  CAT_START:  {icon:'▶', label:'Starting',       col:'#74b9ff'},
-  AUTH:       {icon:'🔒', label:'Authenticating', col:'#74b9ff'},
-  MKDIR:      {icon:'📁', label:'Creating folder', col:'#74b9ff'},
-  COPY:       {icon:'📋', label:'Copying files',  col:'#74b9ff'},
-  COPY_OK:    {icon:'✓',  label:'Files copied',   col:'#74b9ff'},
-  PREP_OK:    {icon:'✓',  label:'Machine ready',  col:'#74b9ff'},
-  SESSION:    {icon:'👤', label:'Detecting user',  col:'#a29bfe'},
-  VBS_READY:  {icon:'📝', label:'Script ready',    col:'#a29bfe'},
-  SCHTASKS:   {icon:'⚙',  label:'Scheduling task', col:'#a29bfe'},
-  MODE:       {icon:'⚙',  label:'Excel mode set',  col:'#a29bfe'},
-  WAITING:    {icon:'⏳', label:'Macro running',   col:'#fdcb6e'},
-  MACRO_DONE: {icon:'✓',  label:'Macro done',      col:'#00b894'},
-  COLLECT:    {icon:'📦', label:'Collecting output',col:'#74b9ff'},
-  OUTPUT:     {icon:'💾', label:'Saving output',   col:'#00b894'},
-  CAT_DONE:   {icon:'✓',  label:'Complete',        col:'#00b894'},
-  CAT_FAIL:   {icon:'✗',  label:'Failed',          col:'#e17055'},
-  REQUEUE:    {icon:'↺',  label:'Requeued',        col:'#fdcb6e'},
+// Stage pipeline steps in order
+const STAGES = [
+  {key:'AUTH',    icon:'🔒', label:'Auth',    col:'#74b9ff'},
+  {key:'COPY',    icon:'📋', label:'Copy',    col:'#74b9ff'},
+  {key:'SESSION', icon:'👤', label:'User',    col:'#a29bfe'},
+  {key:'SCHTASKS',icon:'⚙',  label:'Task',   col:'#a29bfe'},
+  {key:'WAITING', icon:'⏳', label:'Macro',  col:'#fdcb6e'},
+  {key:'COLLECT', icon:'📦', label:'Collect', col:'#74b9ff'},
+];
+
+// Map each log step to its stage index
+const STEP_STAGE = {
+  AUTH:0, COPY:1, COPY_OK:1, PREP_OK:1,
+  SESSION:2,
+  SCHTASKS:3, VBS_READY:3, MODE:3,
+  WAITING:4, MACRO_DONE:4,
+  COLLECT:5, OUTPUT:5, CAT_DONE:5,
 };
 
-function stepBadge(step, status){
-  if(status==='SUCCESS') return '<span class="badge b-ok">✓ Done</span>';
-  if(status==='FAILED')  return '<span class="badge b-err">✗ Failed</span>';
-  if(status==='CANCELLED') return '<span class="badge b-warn">⊘ Cancelled</span>';
-  if(status==='QUEUED')  return '<span class="badge b-gray">⬜ Queued</span>';
-  // RUNNING — show which step with icon and label
-  const s = STEP_LABELS[step] || {icon:'▶', label: step||'Running', col:'#74b9ff'};
-  const isPulse = ['WAITING','SESSION','SCHTASKS','COPY'].includes(step);
-  return `<span class="badge b-blue${isPulse?' pulse':''}" style="background:rgba(116,185,255,.08);color:${s.col}">${s.icon} ${s.label}</span>`;
+function buildPipeline(step, status){
+  if(status==='SUCCESS'){
+    const segs = STAGES.map(s=>`<span style="background:rgba(0,184,148,.2);color:#00b894;border-radius:3px;padding:1px 5px;font-size:9px" title="${s.label}">✓</span>`).join('');
+    return segs + '<span style="background:rgba(0,184,148,.2);color:#00b894;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:600;margin-left:3px">✓ DONE</span>';
+  }
+  if(status==='FAILED')  return '<span class="badge b-err" style="font-size:10px">✗ Failed</span>';
+  if(status==='CANCELLED') return '<span class="badge b-warn" style="font-size:10px">⊘ Cancelled</span>';
+  if(status==='QUEUED')  return '<span style="color:var(--tx3);font-size:10.5px">⬜ Waiting for machine…</span>';
+
+  // RUNNING — build stage bar
+  const curIdx = STEP_STAGE[step] ?? -1;
+  const segs = STAGES.map((s, i) => {
+    if(i < curIdx){
+      // completed stage
+      return `<span style="background:rgba(0,184,148,.2);color:#00b894;border-radius:3px;padding:1px 5px;font-size:9px" title="${s.label} done">✓</span>`;
+    }else if(i === curIdx){
+      // active stage — pulsing
+      return `<span class="pulse" style="background:rgba(255,255,255,.08);color:${s.col};border-radius:3px;padding:1px 6px;font-size:9px;font-weight:600;border:1px solid ${s.col}55" title="Currently: ${s.label}">${s.icon} ${s.label}</span>`;
+    }else{
+      // pending stage
+      return `<span style="background:transparent;color:var(--tx3);border-radius:3px;padding:1px 5px;font-size:9px;border:1px solid var(--bdr)" title="${s.label} pending">${s.icon}</span>`;
+    }
+  });
+  return '<div style="display:flex;gap:2px;align-items:center;flex-wrap:nowrap">'+segs.join('')+'</div>';
 }
 
-function stepDetail(step, msg){
-  if(!step || step==='CAT_START' || step==='MODE') return '—';
-  const s = STEP_LABELS[step];
-  const label = s ? s.label : step;
-  // Clean the message: remove leading "MachineName: " prefix
-  let clean = (msg||'').replace(/^[A-Z0-9_\-]+:\s+/,'').replace(/^[^:]+:\s+/,'');
-  // Trim to readable length
-  if(clean.length > 80) clean = clean.substring(0,80)+'…';
-  if(!clean) return `<span class="tag" style="font-size:10px">${label}</span>`;
-  return `<span class="tag" style="font-size:10px">${label}</span> <span style="color:var(--tx3);font-size:10.5px" title="${(msg||'').replace(/"/g,'&quot;')}">${clean}</span>`;
+function activeUserHTML(qi){
+  if(qi.active_user && !qi.active_user.includes('(fallback)')){
+    const m=qi.run_mode==='hidden'?'🔍':qi.run_mode==='visible'?'👁':'';
+    return `<span style="color:var(--ok);font-weight:600">👤 ${qi.active_user}</span>${m?' <span style="color:var(--tx3);font-size:10px">'+m+'</span>':''}`;
+  }
+  if(qi.active_user && qi.active_user.includes('(fallback)')){
+    return `<span style="color:var(--warn)" title="No active session — running as configured user">⚠ ${qi.active_user.replace(' (fallback)','')}</span>`;
+  }
+  if(qi.status==='RUNNING' && qi.machine) return '<span style="color:var(--tx3);font-size:10px;font-style:italic">detecting…</span>';
+  if(qi.status==='SUCCESS'||qi.status==='FAILED'){
+    const u=_machineUsers[qi.machine_id];
+    return u?`<span style="color:var(--tx3)">👤 ${u}</span>`:'<span style="color:var(--tx3)">—</span>';
+  }
+  return '<span style="color:var(--tx3)">—</span>';
 }
 
 function actionCell(qi){
   const btns=[];
   if(qi.status==='RUNNING'||qi.status==='FAILED'||qi.status==='CANCELLED'){
     btns.push(`<form method="post" action="/api/queue/${qi.id}/requeue" style="display:inline">
-      <button class="btn btn-s" style="color:var(--warn);border:1px solid var(--warn);background:transparent" title="Send back to queue — another free machine will pick it up">&#8635; Requeue</button>
+      <button class="btn btn-s" style="color:var(--warn);border:1px solid var(--warn);background:transparent" title="Reset to QUEUED — next free machine picks it up">↺ Requeue</button>
     </form>`);
   }
   if(qi.status==='RUNNING'&&qi.machine_id){
     btns.push(`<button class="btn btn-s" style="color:var(--err);border:1px solid var(--err);background:transparent;margin-left:4px"
-      onclick="removeMachine(${qi.machine_id},'${(qi.machine||'').replace(/'/g,String.fromCharCode(39))}')"
-      title="Remove machine — QUEUED items return to pool">&#8861; Remove</button>`);
+      onclick="removeMachine(${qi.machine_id},'${(qi.machine||'').replace(/'/g,"\\'")}')"
+      title="Remove machine — QUEUED items return to pool">⊟ Remove</button>`);
   }
   return btns.join('');
 }
@@ -780,50 +837,24 @@ async function poll(){
     if(!r.ok){setTimeout(poll,6000);return;}
     const d=await r.json();
     _freeMachines=d.free_machines||[];
-    // Cache active users for completed row fallback display
     d.queue.forEach(qi=>{if(qi.machine_id&&qi.active_user)_machineUsers[qi.machine_id]=qi.active_user;});
 
     $('st_ok').textContent=d.completed;
     $('st_fail').textContent=d.failed;
     $('st_queued').textContent=d.queue.filter(q=>q.status==='QUEUED').length;
 
-    // Set actions header on first poll
-    const qah=$('qActHeader');if(qah&&d.running)qah.textContent='Actions';
-
     d.queue.forEach(qi=>{
-      const sb=$('qs_'+qi.id);if(sb)sb.innerHTML=stepBadge(qi.step,qi.status);
       const sm=$('qm_'+qi.id);if(sm)sm.textContent=qi.machine||'—';
-      // Active user cell
-      const su=$('qu_'+qi.id);
-      if(su){
-        if(qi.active_user && !qi.active_user.includes('(fallback)')){
-          const modeIcon=qi.run_mode==='hidden'?'🔍':qi.run_mode==='visible'?'👁':'';
-          su.innerHTML=`<span style="color:var(--ok);font-weight:600" title="Logged-in user on remote PC">👤 ${qi.active_user}</span>`
-            +(modeIcon?` <span style="color:var(--tx3);font-size:10px" title="Excel mode">${modeIcon}</span>`:'');
-        }else if(qi.active_user && qi.active_user.includes('(fallback)')){
-          const user=qi.active_user.replace(' (fallback)','');
-          su.innerHTML=`<span style="color:var(--warn)" title="No active session — running as configured user">⚠ ${user}</span>`;
-        }else if(qi.status==='RUNNING' && qi.machine){
-          su.innerHTML='<span style="color:var(--tx3);font-size:10px;font-style:italic">detecting…</span>';
-        }else if(qi.status==='QUEUED'){
-          su.innerHTML='<span style="color:var(--tx3)">—</span>';
-        }else if(qi.status==='SUCCESS'||qi.status==='FAILED'){
-          // Completed — show stored DB value from machine
-          const minfo=_machineUsers[qi.machine_id];
-          su.innerHTML=minfo?`<span style="color:var(--tx3)">👤 ${minfo}</span>`:'<span style="color:var(--tx3)">—</span>';
-        }else{
-          su.innerHTML='<span style="color:var(--tx3)">—</span>';
-        }
-      }
-      const sd=$('qstep_'+qi.id);if(sd)sd.innerHTML=stepDetail(qi.step,qi.step_msg);
+      const su=$('qu_'+qi.id);if(su)su.innerHTML=activeUserHTML(qi);
+      const sp=$('qpipe_'+qi.id);if(sp)sp.innerHTML=buildPipeline(qi.step,qi.status);
       const dur=$('qdur_'+qi.id);
-      if(dur)dur.textContent=qi.duration?qi.duration.toFixed(1)+'s':(qi.status==='RUNNING'?'running…':'—');
+      if(dur)dur.textContent=qi.duration?qi.duration.toFixed(1)+'s':(qi.status==='RUNNING'?'…':'—');
       const act=$('qact_'+qi.id);
       if(act){
         if(d.running&&(qi.status==='RUNNING'||qi.status==='FAILED'||qi.status==='CANCELLED')){
           act.innerHTML=actionCell(qi);
         }else if(qi.error){
-          act.innerHTML=`<span style="color:var(--err)">${qi.error.substring(0,80)}</span>`;
+          act.innerHTML=`<span style="color:var(--err)" title="${qi.error}">${qi.error.substring(0,70)}</span>`;
         }else{act.innerHTML='';}
       }
     });
@@ -835,7 +866,7 @@ async function poll(){
         <td class="${l.lvl==='ERROR'?'le':l.lvl==='WARN'?'lw':'li'}">${l.lvl}</td>
         <td style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.machine}</td>
         <td><span class="tag" style="font-size:10px">${l.step}</span></td>
-        <td style="${l.lvl==='ERROR'?'color:var(--err)':''}overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${l.msg}">${l.msg}</td>
+        <td style="${l.lvl==='ERROR'?'color:var(--err)':''}overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${l.msg.replace(/"/g,'&quot;')}">${l.msg}</td>
       </tr>`).join('');
     }
 
@@ -850,12 +881,48 @@ async function poll(){
 
 async function removeMachine(mid,mname){
   const free=_freeMachines.filter(m=>m.id!==mid);
-  const freeList=free.length?free.map(m=>m.name).join(', '):'none available right now';
-  if(!confirm(`Remove machine "${mname}" from this job?\n\nIts pending (QUEUED) categories will return to the pool.\nFree machines that can pick them up: ${freeList}\n\nProceed?`))return;
+  const freeList=free.length?free.map(m=>m.name).join(', '):'none right now';
+  if(!confirm(`Remove machine "${mname}" from this job?\n\nQueued categories will return to pool.\nFree machines: ${freeList}\n\nProceed?`))return;
+  await fetch('/api/jobs/'+JID+'/remove-machine/'+mid,{method:'POST'});
+  toast('Machine removed — queued items back in pool','ok');
+}
+
+async function openAddMachine(){
+  const mo=$('addMachineToJobMo');
+  const list=$('addMachList');
+  list.innerHTML='<div class="empty">Loading…</div>';
+  mo.classList.add('show');
   try{
-    const r=await fetch('/api/jobs/'+JID+'/remove-machine/'+mid,{method:'POST'});
-    toast('Machine removed — queued items back in pool','ok');
-  }catch(e){toast('Error: '+e.message,'fail');}
+    const r=await fetch('/api/jobs/'+JID+'/available-machines');
+    const d=await r.json();
+    if(!d.machines||!d.machines.length){
+      list.innerHTML='<div class="empty">No available machines — all active machines in this group are already working this job.<br><br>Add more machines to the group first via the Group page, then come back here.</div>';
+      return;
+    }
+    list.innerHTML=d.machines.map(m=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--bdr)">
+        <div>
+          <span style="font-weight:600;font-size:13px">${m.name}</span>
+          <span style="color:var(--tx3);font-size:11px;margin-left:8px">${m.system||''}</span>
+        </div>
+        <button class="btn btn-p btn-s" onclick="addMachine(${m.id},'${m.name.replace(/'/g,"\\'")}',this)">+ Add</button>
+      </div>`).join('');
+  }catch(e){list.innerHTML=`<div class="empty" style="color:var(--err)">Error: ${e.message}</div>`;}
+}
+
+async function addMachine(mid,mname,btn){
+  btn.disabled=true;btn.textContent='Adding…';
+  try{
+    const r=await fetch('/api/jobs/'+JID+'/add-machine/'+mid,{method:'POST'});
+    const d=await r.json();
+    if(d.ok){
+      btn.textContent='✓ Added';btn.style.background='var(--ok)';
+      toast(mname+' added — prepping now, will pick up queued categories','ok');
+    }else{
+      btn.disabled=false;btn.textContent='+ Add';
+      toast('Failed: '+d.message,'fail');
+    }
+  }catch(e){btn.disabled=false;btn.textContent='+ Add';toast('Error: '+e.message,'fail');}
 }
 
 poll();

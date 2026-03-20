@@ -485,7 +485,33 @@ async def requeue_item(qid: int):
                   message=f"Category '{row['cat_value']}' requeued by user (was {row['status']})")
     return RedirectResponse(f"/jobs/{jid}", 303)
 
-@app.post("/api/jobs/{jid}/remove-machine/{mid}")
+@app.post("/api/jobs/{jid}/add-machine/{mid}")
+async def add_machine_to_running_job(jid: int, mid: int):
+    """Add a new machine to a running job so it can pick up QUEUED categories."""
+    if not E.is_running(jid):
+        raise HTTPException(400, "Job is not running")
+    j = D.get_job(jid)
+    if not j: raise HTTPException(404)
+    m = D.get_machine(mid)
+    if not m: raise HTTPException(404, "Machine not found in group")
+    ok, msg = E.add_machine_to_job(jid, mid)
+    return JSONResponse({"ok": ok, "message": msg})
+
+@app.get("/api/jobs/{jid}/available-machines")
+async def available_machines_for_job(jid: int):
+    """Return machines in this job's group that are active but not yet working this job."""
+    j = D.get_job(jid)
+    if not j: raise HTTPException(404)
+    with D.db() as c:
+        # Machines already involved in this job (assigned to any queue item)
+        busy = {r["machine_id"] for r in c.execute(
+            "SELECT DISTINCT machine_id FROM job_queue WHERE job_id=? AND machine_id IS NOT NULL", (jid,)).fetchall()}
+        all_machines = c.execute(
+            "SELECT * FROM machines WHERE group_id=? AND is_active=1", (j["group_id"],)).fetchall()
+    available = [{"id": m["machine_id"], "name": m["machine_name"],
+                  "system": m["system_name"] or ""} for m in all_machines if m["machine_id"] not in busy]
+    return JSONResponse({"machines": available})
+
 async def remove_machine_from_job(jid: int, mid: int):
     """Remove a machine from a running job — its QUEUED items return to pool."""
     if not E.is_running(jid):

@@ -17,10 +17,54 @@ import notifier as N
 COMPILED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "compiled_output")
 _running_jobs = {}
 _kill_jobs = {}
+_job_executors = {}   # jid -> ThreadPoolExecutor (kept alive while job runs)
+_job_context = {}     # jid -> {excel_file, macro_name, target_cell, job_folder, group_name, compile_dir, files}
 
 
-def is_running(jid):
-    return _running_jobs.get(jid, False)
+def add_machine_to_job(jid, mid):
+    """Hot-add a machine to a running job. Preps it and starts a new worker thread."""
+    ctx = _job_context.get(jid)
+    ex_info = _job_executors.get(jid)
+    if not ctx or not ex_info:
+        return False, "Job not running or context unavailable"
+    m = D.get_machine(mid)
+    if not m:
+        return False, "Machine not found"
+
+    def _do_add():
+        try:
+            D.add_log(jid, machine_id=mid, level="INFO", step="ADD_MACHINE",
+                      message=f"Hot-adding {m['machine_name']} to running job #{jid}")
+            unc_folder = _prep_machine(dict(m), ctx["job_folder"], ctx["files"], jid)
+
+            # Increment active worker count BEFORE launching
+            with ex_info["lock"]:
+                ex_info["active"][0] += 1
+                ex_info["done"].clear()  # job not done yet
+
+            mw = ex_info["machine_worker"]
+            def _tracked():
+                try:
+                    mw(mid, unc_folder)
+                finally:
+                    with ex_info["lock"]:
+                        ex_info["active"][0] -= 1
+                        if ex_info["active"][0] <= 0:
+                            ex_info["done"].set()
+
+            ex_info["executor"].submit(_tracked)
+            D.add_log(jid, machine_id=mid, level="INFO", step="ADD_MACHINE",
+                      message=f"{m['machine_name']} worker started — will pick up QUEUED categories")
+        except Exception as e:
+            D.add_log(jid, machine_id=mid, level="ERROR", step="ADD_MACHINE",
+                      message=f"Failed to add {m['machine_name']}: {e}")
+
+    import threading as _t
+    _t.Thread(target=_do_add, daemon=True).start()
+    return True, f"Adding {m['machine_name']} to job — prep in progress"
+
+
+
 
 
 def kill_job(jid):
@@ -187,7 +231,14 @@ def _run_job(jid):
             D.add_log(jid, level="ERROR", step="COMPILE_PATH",
                       message=f"Cannot write to compile_path '{compile_dir}': {e}. "
                               f"Fix path in Settings or check folder permissions — all output will be LOST.")
-            # Don't abort — still run macros, just warn loudly
+
+        # Store job context so hot-added machines can access it
+        _job_context[jid] = {
+            "excel_file": excel_file, "macro_name": macro_name,
+            "target_cell": target_cell, "job_folder": job_folder,
+            "group_name": group_name, "compile_dir": compile_dir,
+            "files": files, "gid": gid,
+        }
 
         # == PHASE 1: Prep machines (auth + copy files) ==
         machine_ready = {}  # mid -> unc_folder
@@ -208,6 +259,9 @@ def _run_job(jid):
             return
 
         # == PHASE 2: Each machine processes categories via schtasks ==
+        # Use a persistent executor stored globally so hot-added machines can join
+        executor = ThreadPoolExecutor(max_workers=32)  # large enough for any additions
+        _job_executors[jid] = executor
         def machine_worker(mid, unc_folder):
             m = dict(D.get_machine(mid))   # convert sqlite3.Row → dict so .get() works
             mname = m["machine_name"]
@@ -342,17 +396,39 @@ def _run_job(jid):
                     except:
                         pass
 
-        # Launch workers
-        with ThreadPoolExecutor(max_workers=max(len(machine_ready), 1)) as pool:
-            futs = [pool.submit(machine_worker, mid, unc)
-                    for mid, unc in machine_ready.items()]
-            for w in as_completed(futs):
-                try:
-                    w.result()
-                except Exception as e:
-                    D.add_log(jid, level="ERROR", step="WORKER_CRASH", message=str(e))
+        # Track active workers with a counter protected by a lock
+        import threading as _threading
+        _active_workers = [len(machine_ready)]
+        _workers_lock = _threading.Lock()
+        _all_done = _threading.Event()
+        _job_executors[jid] = {
+            "executor": executor,
+            "machine_worker": machine_worker,
+            "active": _active_workers,
+            "lock": _workers_lock,
+            "done": _all_done,
+        }
+
+        def tracked_worker(mid, unc):
+            try:
+                machine_worker(mid, unc)
+            finally:
+                with _workers_lock:
+                    _active_workers[0] -= 1
+                    if _active_workers[0] <= 0:
+                        _all_done.set()
+
+        # Launch initial workers
+        for mid, unc in machine_ready.items():
+            executor.submit(tracked_worker, mid, unc)
+
+        # Wait for all workers (including any hot-added ones)
+        _all_done.wait()
 
         # Finalize
+        executor.shutdown(wait=False)
+        _job_executors.pop(jid, None)
+        _job_context.pop(jid, None)
         if _kill_jobs.get(jid):
             with D.db() as c:
                 c.execute("UPDATE jobs SET status='KILLED',finished_at=? WHERE job_id=?",
@@ -381,6 +457,8 @@ def _run_job(jid):
     finally:
         _running_jobs.pop(jid, None)
         _kill_jobs.pop(jid, None)
+        _job_executors.pop(jid, None)
+        _job_context.pop(jid, None)
 
 
 # =====================================================================
