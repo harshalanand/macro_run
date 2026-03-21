@@ -542,8 +542,32 @@ async def get_test_job_results(gid: int):
 
 @app.get("/api/groups/{gid}/run", response_class=HTMLResponse)
 async def run_job_get(gid: int):
-    """Redirect GET requests to the group page — Run Job requires POST (form submit)."""
+    """Redirect browser GET to group page — Run Job requires a POST (form submit)."""
     return RedirectResponse(f"/groups/{gid}", 303)
+
+@app.post("/api/groups/{gid}/run")
+async def run_job(gid: int):
+    g = D.get_group(gid)
+    if not g: raise HTTPException(404)
+    # ONE JOB PER GROUP: block if any job is already running for this group
+    running_jids = D.get_running_job_ids_for_group(gid)
+    actually_running = [j for j in running_jids if E.is_running(j)]
+    if actually_running:
+        raise HTTPException(400, f"Group '{g['group_name']}' already has job #{actually_running[0]} running. "
+                            f"Only one job per group at a time. Kill it first or wait for it to finish.")
+    if running_jids and not actually_running:
+        D.fix_stale_running_jobs(set())
+    files = D.get_files(gid)
+    machines = [m for m in D.get_machines(gid) if m["is_active"]]
+    cats = D.get_categories(gid)
+    if not files: raise HTTPException(400, "No files uploaded")
+    if not machines: raise HTTPException(400, "No active machines")
+    if not cats: raise HTTPException(400, "No categories defined")
+    if not g["macro_name"]: raise HTTPException(400, "Macro name not configured in group settings")
+    if not g["excel_file_name"]: raise HTTPException(400, "Excel file not set in group settings")
+    jid = D.create_job(gid)
+    E.run_async(jid)
+    return RedirectResponse(f"/jobs/{jid}", 303)
 
     g = D.get_group(gid)
     if not g: raise HTTPException(404)
