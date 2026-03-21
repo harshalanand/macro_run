@@ -554,14 +554,25 @@ def update_machine(mid, **kw):
         c.execute(f"UPDATE machines SET {clause} WHERE machine_id=?", list(u.values())+[mid])
 
 def update_machine_active_user(mid, username):
-    """Store the detected active session user for a group machine."""
+    """Store the detected active session user for a group machine by machine_id."""
     with db() as c:
         c.execute("UPDATE machines SET active_user=? WHERE machine_id=?", (username or "", mid))
 
 def update_master_active_user(machine_name, username):
     """Store the detected active session user in machine master by name."""
     with db() as c:
-        c.execute("UPDATE machine_master SET active_user=? WHERE machine_name=?", (username or "", machine_name))
+        c.execute("UPDATE machine_master SET active_user=? WHERE machine_name=?",
+                  (username or "", machine_name))
+
+def update_machines_active_user_by_hostname(hostname, username):
+    """Update active_user in group machines table by system_name match.
+    Called by health monitor so the group detail page also reflects current user.
+    Always writes (even empty string) so stale names clear when user logs off."""
+    if not hostname:
+        return
+    with db() as c:
+        c.execute("UPDATE machines SET active_user=? WHERE LOWER(system_name)=LOWER(?)",
+                  (username or "", hostname))
 
 
 def bulk_import_machines(gid, rows):

@@ -1181,18 +1181,21 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
             hostname, username, password, jid, qid, mid)
         if detected_user:
             ru_user = detected_user.split("\\")[-1].strip()
+            # Update both tables — group machines (by id) and master (by name) and by hostname
             D.update_machine_active_user(mid, ru_user)
             D.update_master_active_user(hostname, ru_user)
+            D.update_machines_active_user_by_hostname(hostname, ru_user)
             if not is_console_session:
-                # RDP or unknown session — /it won't fire, go straight to headless admin
                 D.add_log(jid, qid, mid, "INFO", "SESSION",
-                          f"{hostname}: '{ru_user}' is on RDP/remote session — "
-                          f"skipping /it, will use headless admin '{configured_ru}'")
+                          f"{hostname}: '{ru_user}' on RDP session — "
+                          f"using no-/rp strategy (fires in their RDP session)")
         else:
             ru_user = configured_ru
+            # Clear stale active_user — nobody is logged in
+            D.update_machine_active_user(mid, "")
+            D.update_machines_active_user_by_hostname(hostname, "")
             D.add_log(jid, qid, mid, "WARN", "SESSION",
                       f"{hostname}: no active session detected — using admin '{ru_user}' headless.")
-            D.update_machine_active_user(mid, "")
     else:
         ru_user = configured_ru
         is_console_session = True  # local = always console

@@ -36,10 +36,20 @@ if "--reload" in sys.argv or any("--reload" in str(a) for a in sys.argv):
 # Uses a fast ICMP-style ping first, then SMB auth, to determine ON/OFF.
 
 def _health_monitor_loop():
-    """Background thread: re-checks all master machines every 10 minutes."""
+    """Background thread: checks machines on two schedules.
+    Every 2 min  → fast user detection only (ping + query user)
+    Every 10 min → full health check (ping + auth + user)
+    This ensures active_user updates within 2 minutes of a login change."""
     import time as _time
-    _time.sleep(30)   # wait 30s after startup before first check
+    _time.sleep(30)   # wait 30s after startup
+    full_check_interval = 600   # 10 minutes
+    fast_check_interval = 120   # 2 minutes
+    last_full = 0
+
     while True:
+        now = _time.time()
+        do_full = (now - last_full) >= full_check_interval
+
         try:
             machines = D.get_master_machines()
             for m in machines:
@@ -47,45 +57,69 @@ def _health_monitor_loop():
                     m = dict(m)
                     hostname = (m.get("system_name") or m.get("ip_address") or "").strip()
                     if not hostname:
-                        D.update_master_health(m["master_id"], "UNKNOWN", "No hostname/IP configured")
+                        if do_full:
+                            D.update_master_health(m["master_id"], "UNKNOWN",
+                                                   "No hostname/IP configured")
                         continue
-                    # Fast reachability check via ping (1 packet, 1s timeout)
+
+                    # Always ping first — fast and tells us if machine is on/off
                     ping = subprocess.run(
-                        ["ping", "-n", "1", "-w", "1000", hostname],
+                        ["ping", "-n", "1", "-w", "1500", hostname],
                         capture_output=True, timeout=5)
                     if ping.returncode != 0:
                         D.update_master_health(m["master_id"], "OFFLINE",
-                                               f"Ping failed — {hostname} is unreachable or powered off")
+                                               f"Ping failed — {hostname} unreachable")
+                        # Clear active user when machine goes offline
+                        D.update_master_active_user(m["machine_name"], "")
+                        D.update_machines_active_user_by_hostname(hostname, "")
                         continue
-                    # Machine is reachable — do a quick share access check
-                    shared = (m.get("shared_folder") or "").strip()
+
                     username = (m.get("username") or "").strip()
                     password = (m.get("password") or "").strip()
-                    if shared and username and password:
-                        auth_ok = E._net_use_auth(shared, username, password)
-                        if auth_ok:
-                            # Also detect current user for display
-                            detected_user, _ = E._get_active_session_user(hostname, username, password)
-                            active = detected_user.split("\\")[-1] if detected_user else ""
-                            if active:
-                                D.update_master_active_user(m["machine_name"], active)
-                            D.update_master_health(m["master_id"], "OK",
-                                                   f"Online | {hostname} reachable | share accessible"
-                                                   + (f" | user: {active}" if active else ""))
+
+                    # Fast path: always detect current user (runs every 2 min)
+                    if username and password:
+                        detected_user, is_console = E._get_active_session_user(
+                            hostname, username, password)
+                        active = detected_user.split("\\")[-1] if detected_user else ""
+                        session_type = "console" if is_console else ("rdp" if detected_user else "")
+
+                        # Always write — clears stale name if user logged off
+                        D.update_master_active_user(m["machine_name"], active)
+                        D.update_machines_active_user_by_hostname(hostname, active)
+
+                    # Full path: auth + health status (every 10 min)
+                    if do_full:
+                        shared = (m.get("shared_folder") or "").strip()
+                        if shared and username and password:
+                            auth_ok = E._net_use_auth(shared, username, password)
+                            if auth_ok:
+                                detail = f"Online | {hostname} | share OK"
+                                if active:
+                                    detail += f" | user: {active} ({session_type})"
+                                D.update_master_health(m["master_id"], "OK", detail)
+                            else:
+                                D.update_master_health(m["master_id"], "PARTIAL",
+                                                       "Online but share auth failed — check credentials")
                         else:
                             D.update_master_health(m["master_id"], "PARTIAL",
-                                                   f"Online (ping OK) but share auth failed — check credentials")
-                    else:
-                        D.update_master_health(m["master_id"], "PARTIAL",
-                                               f"Online (ping OK) | no share configured for auth test")
+                                                   "Online (ping OK) | no share configured")
+
                 except Exception as e:
                     try:
-                        D.update_master_health(m["master_id"], "FAIL", f"Health check error: {e}")
+                        if do_full:
+                            D.update_master_health(m["master_id"], "FAIL",
+                                                   f"Health check error: {e}")
                     except Exception:
                         pass
+
+            if do_full:
+                last_full = _time.time()
+
         except Exception:
             pass
-        _time.sleep(600)   # 10 minutes
+
+        _time.sleep(fast_check_interval)  # sleep 2 minutes between user checks
 
 
 import threading as _threading
