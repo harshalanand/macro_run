@@ -191,30 +191,27 @@ def _run_test_job(gid):
                 _cleanup_test(unc_folder)
                 return
 
-            # Step 5: Detect active user
-            detected = _get_active_session_user(hostname, username, password)
-            if detected:
-                ru_user = detected.split("\\")[-1].strip()
-                log(mid, mname, "SESSION", True,
-                    "Active user: '{}' — schtasks will run in their session".format(ru_user))
+            # Step 5: Detect active user AND session type
+            detected_user, is_console = _get_active_session_user(hostname, username, password)
+            admin_ru = username.split("\\")[-1] if "\\" in username else username
+            if detected_user:
+                ru_user = detected_user.split("\\")[-1].strip()
+                session_info = "console — /it will fire" if is_console else "RDP/remote — will use headless admin"
+                log(mid, mname, "SESSION", is_console,
+                    "Active user: '{}' | session type: {}".format(ru_user, session_info))
             else:
-                ru_user = username.split("\\")[-1] if "\\" in username else username
+                ru_user = admin_ru
                 log(mid, mname, "SESSION", False,
-                    "No active session detected — will try as '{}'. "
-                    "Enable Remote Desktop Services + Remote Registry on {}.".format(ru_user, hostname))
+                    "No active session — will use admin '{}' headless. "
+                    "Enable Remote Registry + Remote Desktop Services on {}.".format(ru_user, hostname))
 
             # Step 6: Create + trigger schtask
+            # KEY RULE:
+            #   /it (interactive flag) ONLY works when user is at the physical console.
+            #   RDP sessions NEVER fire /it tasks — they get stuck in Ready silently.
+            #   Always fall back to headless admin (whose password we know).
             task_name = "MQ_TEST_{}_{}".format(gid, mid)
             task_cmd = 'cscript //NoLogo "{}"'.format(local_vbs)
-
-            # /ru user strategy:
-            # - If session detected: run as that user with /it (their interactive session)
-            # - Headless fallback: ALWAYS run as the configured admin (username) whose
-            #   password we know. Never use /rp with a detected user's name since we
-            #   don't know their personal password.
-            admin_ru = username.split("\\")[-1] if "\\" in username else username
-
-            # Use a future start time to avoid "/ST is earlier than current time" warning
             import datetime as _dt
             st_time = (_dt.datetime.now() + _dt.timedelta(minutes=1)).strftime("%H:%M")
 
@@ -232,11 +229,12 @@ def _run_test_job(gid):
                     cmd.append("/it")
                 return cmd
 
-            # Attempt 1: if session detected, try /it with detected user
-            # Attempt 2: headless as configured admin (password always known)
+            # Build attempt list based on session type
             attempts = []
-            if detected:
-                attempts.append((detected.split("\\")[-1].strip(), True,  False, "interactive /it"))
+            if detected_user and is_console:
+                # Physical console session — /it will fire
+                attempts.append((ru_user, True, False, "interactive /it (console session)"))
+            # Always include headless admin as fallback (or primary if RDP/no session)
             attempts.append((admin_ru, False, True, "headless as admin"))
 
             created = False
@@ -1054,15 +1052,24 @@ def _is_local(hostname):
 def _get_active_session_user(hostname, admin_username, admin_password, jid=None, qid=None, mid=None):
     """
     Detect the currently logged-in interactive user on a remote machine.
-    Tries multiple methods in order until one succeeds.
+    Returns (username, is_console) tuple, or (None, False) if not found.
 
-    Method 1: query user /server:hostname  (fastest, needs Remote Desktop Services)
-    Method 2: wmic /node:hostname computersystem get username  (works on most Windows)
-    Method 3: tasklist explorer.exe (finds user via their explorer.exe process)
+    CRITICAL DISTINCTION:
+      - console session  = user is at the physical keyboard/monitor
+                          → schtasks /it WILL fire
+      - rdp-tcp#N session = user connected via Remote Desktop
+                          → schtasks /it will NOT fire (wrong session type)
+                          → must use headless (no /it) with admin password
+
+    Method 1: query user /server  — returns username + sessionname column
+    Method 2: wmic computersystem get username — username only (assume non-console)
+    Method 3: tasklist explorer.exe — username only (assume non-console)
     """
     plain_user = admin_username.split("\\")[-1] if "\\" in admin_username else admin_username
 
-    # Method 1: query user
+    # Method 1: query user — best because it also tells us session type
+    # Output format: USERNAME  SESSIONNAME  ID  STATE  IDLE TIME  LOGON TIME
+    # SESSIONNAME is 'console' for physical, 'rdp-tcp#N' or 'ts#N' for RDP
     try:
         r = subprocess.run(["query", "user", f"/server:{hostname}"],
                            capture_output=True, text=True, timeout=15)
@@ -1071,17 +1078,86 @@ def _get_active_session_user(hostname, admin_username, admin_password, jid=None,
                 line = line.strip()
                 if not line:
                     continue
-                parts = line.lstrip(">").split()
-                if len(parts) >= 4 and parts[3].lower() == "active":
-                    logged_user = parts[0].strip()
-                    if jid:
-                        D.add_log(jid, qid, mid, "INFO", "SESSION",
-                                  f"{hostname}: active user = '{logged_user}' (via query user)")
-                    return logged_user
+                # Strip the > that marks the current session
+                is_current = line.startswith(">")
+                raw = line.lstrip(">").split()
+                # Need at least: username, sessionname, id, state
+                if len(raw) < 4:
+                    continue
+                username_col = raw[0].strip()
+                session_name = raw[1].strip().lower() if len(raw) > 1 else ""
+                state = raw[3].strip().lower() if len(raw) > 3 else ""
+                if state != "active":
+                    continue
+                # Determine if this is a physical console session
+                is_console = session_name == "console" or session_name.startswith("console")
+                is_rdp = "rdp" in session_name or session_name.startswith("ts")
+                session_type = "console" if is_console else ("rdp" if is_rdp else session_name or "unknown")
+                if jid:
+                    D.add_log(jid, qid, mid, "INFO", "SESSION",
+                              f"{hostname}: active user = '{username_col}' "
+                              f"session={session_type} "
+                              f"{'— /it will fire (console)' if is_console else '— /it will NOT fire (RDP/remote), using headless'}")
+                return username_col, is_console
     except Exception as e:
         if jid:
             D.add_log(jid, qid, mid, "INFO", "SESSION",
                       f"{hostname}: query user failed ({e}), trying WMI...")
+
+    # Method 2: wmic — gives username but not session type; assume non-console (safe default)
+    try:
+        r = subprocess.run(
+            ["wmic", f"/node:{hostname}", f"/user:{admin_username}",
+             f"/password:{admin_password}", "computersystem", "get", "username", "/format:value"],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line.lower().startswith("username=") and "=" in line:
+                    val = line.split("=", 1)[1].strip()
+                    if val:
+                        logged_user = val.split("\\")[-1].strip()
+                        if logged_user and logged_user.lower() not in ("", "username"):
+                            if jid:
+                                D.add_log(jid, qid, mid, "INFO", "SESSION",
+                                          f"{hostname}: active user = '{logged_user}' (via WMI, session type unknown — using headless)")
+                            # WMI can't tell us session type — assume non-console (headless safe)
+                            return logged_user, False
+    except Exception as e:
+        if jid:
+            D.add_log(jid, qid, mid, "INFO", "SESSION",
+                      f"{hostname}: WMI failed ({e}), trying tasklist...")
+
+    # Method 3: tasklist explorer.exe — username only, assume non-console
+    try:
+        r = subprocess.run(
+            ["tasklist", "/s", hostname, "/u", admin_username, "/p", admin_password,
+             "/fi", "imagename eq explorer.exe", "/fo", "csv", "/v", "/nh"],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if "explorer.exe" in line.lower():
+                    parts = [p.strip('"') for p in line.split('","')]
+                    if len(parts) >= 7 and parts[6] and "\\" in parts[6]:
+                        logged_user = parts[6].split("\\")[-1].strip()
+                        if logged_user:
+                            if jid:
+                                D.add_log(jid, qid, mid, "INFO", "SESSION",
+                                          f"{hostname}: active user = '{logged_user}' (via tasklist, session type unknown — using headless)")
+                            return logged_user, False
+    except Exception as e:
+        if jid:
+            D.add_log(jid, qid, mid, "INFO", "SESSION",
+                      f"{hostname}: tasklist failed ({e})")
+
+    if jid:
+        D.add_log(jid, qid, mid, "WARN", "SESSION",
+                  f"{hostname}: no active session found via any method. "
+                  f"Will use configured admin '{plain_user}' headless. "
+                  f"To fix: enable Remote Registry + Remote Desktop Services on {hostname}.")
+    return None, False
+
+
 
     # Method 2: wmic computersystem get username
     try:
@@ -1202,30 +1278,30 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
 
     mode = "LOCAL" if local else "REMOTE"
 
-    # ── Step 1: Detect active session user ──
+    # ── Step 1: Detect active session user and session type ──
     ru_user = None
-    use_password = False
+    is_console_session = False
 
     if not local:
-        detected = _get_active_session_user(hostname, username, password, jid, qid, mid)
-        if detected:
-            ru_user = detected.split("\\")[-1].strip()
-            use_password = False
-            D.add_log(jid, qid, mid, "INFO", "SESSION",
-                      f"{hostname}: active user = '{ru_user}' "
-                      f"{'(same as configured)' if ru_user.lower() == configured_ru.lower() else f'[configured={configured_ru}]'}"
-                      f" — task runs AS {ru_user}")
+        detected_user, is_console_session = _get_active_session_user(
+            hostname, username, password, jid, qid, mid)
+        if detected_user:
+            ru_user = detected_user.split("\\")[-1].strip()
             D.update_machine_active_user(mid, ru_user)
             D.update_master_active_user(hostname, ru_user)
+            if not is_console_session:
+                # RDP or unknown session — /it won't fire, go straight to headless admin
+                D.add_log(jid, qid, mid, "INFO", "SESSION",
+                          f"{hostname}: '{ru_user}' is on RDP/remote session — "
+                          f"skipping /it, will use headless admin '{configured_ru}'")
         else:
             ru_user = configured_ru
-            use_password = True
             D.add_log(jid, qid, mid, "WARN", "SESSION",
-                      f"{hostname}: no active session detected — falling back to '{ru_user}'.")
+                      f"{hostname}: no active session detected — using admin '{ru_user}' headless.")
             D.update_machine_active_user(mid, "")
     else:
         ru_user = configured_ru
-        use_password = True
+        is_console_session = True  # local = always console
 
     def _schtasks_base():
         """Base schtasks args for /s authentication."""
@@ -1272,17 +1348,17 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
         return False
 
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-              f"Scheduling task on {hostname} ({mode}) ru='{ru_user}'")
+              f"Scheduling task on {hostname} ({mode}) ru='{ru_user}' "
+              f"session={'console' if is_console_session else 'rdp/headless'}")
 
-    # ── Step 2: Attempt order ──
-    # 1. Detected/configured user + /it  (interactive, user has desktop session)
-    # 2. Configured admin, no /it        (headless — admin password always known)
-    # Key: headless fallback ALWAYS uses configured_ru (whose password we know),
-    #      never the detected user (we don't know their personal password).
-    create_attempts = [
-        (True,  use_password, False, "interactive /it", None),
-        (False, True,         False, "headless/admin",  configured_ru),
-    ]
+    # ── Step 2: Attempt order — based on session type ──
+    # Console session  → try /it first (fires in user's desktop session)
+    # RDP/no session   → go straight to headless admin (skip /it entirely)
+    # Headless admin   → always the fallback (admin password is always known)
+    create_attempts = []
+    if is_console_session:
+        create_attempts.append((True, False, False, "interactive /it (console)", None))
+    create_attempts.append((False, True, False, "headless/admin", configured_ru))
 
     task_created = False
     used_label = ""

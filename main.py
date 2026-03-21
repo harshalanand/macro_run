@@ -65,8 +65,8 @@ def _health_monitor_loop():
                         auth_ok = E._net_use_auth(shared, username, password)
                         if auth_ok:
                             # Also detect current user for display
-                            detected = E._get_active_session_user(hostname, username, password)
-                            active = detected.split("\\")[-1] if detected else ""
+                            detected_user, _ = E._get_active_session_user(hostname, username, password)
+                            active = detected_user.split("\\")[-1] if detected_user else ""
                             if active:
                                 D.update_master_active_user(m["machine_name"], active)
                             D.update_master_health(m["master_id"], "OK",
