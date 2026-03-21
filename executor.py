@@ -627,22 +627,16 @@ def _run_job(jid):
                     # Snapshot folder BEFORE macro runs — so we only copy NEW output
                     pre_snapshot = _snapshot_folder(unc_folder)
 
-                    # Execute on remote PC — try WMI first (no admin session needed),
-                    # fall back to schtasks if WMI unavailable
-                    wmi_ok, wmi_msg = _run_via_wmi(
-                        local_vbs, hostname, username, password, jid, qid, mid, mname)
-
-                    if wmi_ok:
-                        D.add_log(jid, qid, mid, "INFO", "EXEC",
-                                  f"{mname}: running via WMI (no admin session required)")
-                    else:
-                        D.add_log(jid, qid, mid, "INFO", "EXEC",
-                                  f"{mname}: WMI unavailable ({wmi_msg[:80]}), falling back to schtasks")
-                        ok = _run_via_schtasks(local_vbs, hostname, username, password,
-                                               task_name, jid, qid, mid, mname,
-                                               interactive=excel_visible)
-                        if not ok:
-                            raise RuntimeError(f"Both WMI and schtasks failed on {hostname}")
+                    # Execute on remote PC via schtasks
+                    # _run_via_schtasks uses session-aware strategy:
+                    #   console user → /ru user /it  (fires in their desktop)
+                    #   RDP user     → /ru user       (no /rp — runs in their existing session)
+                    #   no session   → /ru admin /rp  (headless — Excel will open minimised/bg)
+                    ok = _run_via_schtasks(local_vbs, hostname, username, password,
+                                           task_name, jid, qid, mid, mname,
+                                           interactive=excel_visible)
+                    if not ok:
+                        raise RuntimeError(f"schtasks failed on {hostname}")
 
                     # Poll result via UNC
                     timeout_secs = int(D.get_setting("macro_timeout", "1800"))
@@ -1159,106 +1153,6 @@ def _get_active_session_user(hostname, admin_username, admin_password, jid=None,
 
 
 
-    # Method 2: wmic computersystem get username
-    try:
-        r = subprocess.run(
-            ["wmic", f"/node:{hostname}", f"/user:{admin_username}",
-             f"/password:{admin_password}", "computersystem", "get", "username", "/format:value"],
-            capture_output=True, text=True, timeout=15)
-        if r.returncode == 0:
-            for line in r.stdout.splitlines():
-                line = line.strip()
-                if line.lower().startswith("username=") and "=" in line:
-                    val = line.split("=", 1)[1].strip()
-                    if val:
-                        # val may be DOMAIN\user or just user
-                        logged_user = val.split("\\")[-1].strip()
-                        if logged_user and logged_user.lower() not in ("", "username"):
-                            if jid:
-                                D.add_log(jid, qid, mid, "INFO", "SESSION",
-                                          f"{hostname}: active user = '{logged_user}' (via WMI)")
-                            return logged_user
-    except Exception as e:
-        if jid:
-            D.add_log(jid, qid, mid, "INFO", "SESSION",
-                      f"{hostname}: WMI failed ({e}), trying tasklist...")
-
-    # Method 3: find explorer.exe owner via tasklist
-    try:
-        r = subprocess.run(
-            ["tasklist", "/s", hostname, "/u", admin_username, "/p", admin_password,
-             "/fi", "imagename eq explorer.exe", "/fo", "csv", "/nh"],
-            capture_output=True, text=True, timeout=15)
-        if r.returncode == 0 and "explorer.exe" in r.stdout.lower():
-            # CSV format: "Image","PID","Session","Num","Mem"  — no username column here
-            # But if explorer.exe is running, the logged user is the configured user most likely
-            # Try with /v for verbose which includes username
-            r2 = subprocess.run(
-                ["tasklist", "/s", hostname, "/u", admin_username, "/p", admin_password,
-                 "/fi", "imagename eq explorer.exe", "/fo", "csv", "/v", "/nh"],
-                capture_output=True, text=True, timeout=15)
-            if r2.returncode == 0:
-                for line in r2.stdout.splitlines():
-                    if "explorer.exe" in line.lower():
-                        parts = [p.strip('"') for p in line.split('","')]
-                        # Verbose CSV: Image,PID,Session,Num,Mem,Status,Username,CPU,Window
-                        if len(parts) >= 7 and parts[6] and "\\" in parts[6]:
-                            logged_user = parts[6].split("\\")[-1].strip()
-                            if logged_user:
-                                if jid:
-                                    D.add_log(jid, qid, mid, "INFO", "SESSION",
-                                              f"{hostname}: active user = '{logged_user}' (via tasklist)")
-                                return logged_user
-    except Exception as e:
-        if jid:
-            D.add_log(jid, qid, mid, "INFO", "SESSION",
-                      f"{hostname}: tasklist failed ({e})")
-
-    if jid:
-        D.add_log(jid, qid, mid, "WARN", "SESSION",
-                  f"{hostname}: could not detect logged-in user via any method. "
-                  f"Will try running task as configured user '{plain_user}' with /it. "
-                  f"If macro fails, ensure the user is logged in and 'Remote Registry' + "
-                  f"'Remote Desktop Services' are enabled on {hostname}.")
-    return None
-
-
-
-def _run_via_wmi(vbs_local_path, hostname, username, password, jid, qid, mid, mname):
-    """
-    Execute VBS via WMI Win32_Process.Create on the remote machine.
-    This is the PREFERRED method when available:
-    - Runs in the currently logged-in user's session automatically
-    - Does NOT require the user to be Administrator
-    - Does NOT need /it flag or session detection
-    - Requires WMI to be accessible (port 135 + dynamic RPC)
-
-    Returns (ok: bool, message: str)
-    """
-    try:
-        cmd = [
-            "wmic", f"/node:{hostname}",
-            f"/user:{username}", f"/password:{password}",
-            "process", "call", "create",
-            f'cscript //NoLogo "{vbs_local_path}"'
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if r.returncode == 0 and ("ReturnValue = 0" in r.stdout or "ProcessId" in r.stdout):
-            # Extract PID if available
-            pid = ""
-            for line in r.stdout.splitlines():
-                if "ProcessId" in line:
-                    pid = line.strip()
-                    break
-            D.add_log(jid, qid, mid, "INFO", "WMI",
-                      f"{hostname}: process started via WMI {pid}")
-            return True, "WMI"
-        err = (r.stderr.strip() or r.stdout.strip())[:200]
-        return False, err
-    except Exception as e:
-        return False, str(e)
-
-
 def _run_via_schtasks(vbs_local_path, hostname, username, password,
                       task_name, jid, qid, mid, mname, interactive=True):
     """
@@ -1349,16 +1243,34 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
 
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
               f"Scheduling task on {hostname} ({mode}) ru='{ru_user}' "
-              f"session={'console' if is_console_session else 'rdp/headless'}")
+              f"session={'console' if is_console_session else 'rdp/remote' if ru_user != configured_ru else 'no-session/admin'}")
 
-    # ── Step 2: Attempt order — based on session type ──
-    # Console session  → try /it first (fires in user's desktop session)
-    # RDP/no session   → go straight to headless admin (skip /it entirely)
-    # Headless admin   → always the fallback (admin password is always known)
+    # ── Step 2: Attempt order — session-type aware ──
+    #
+    # Windows Task Scheduler behaviour:
+    #   /ru user /it           = runs ONLY in console (physical keyboard) session
+    #   /ru user               = runs in user's existing session (console OR RDP) when triggered
+    #   /ru user /rp pass      = runs as user in BACKGROUND (Session 0) — Excel CANNOT open
+    #   /ru SYSTEM             = Session 0, no desktop — Excel CANNOT open
+    #
+    # Strategy:
+    #   1. Console session  → /ru detected_user /it    (best: fires in their desktop)
+    #   2. RDP session      → /ru detected_user        (no /rp! fires in their RDP session)
+    #   3. No session       → /ru admin /rp password   (headless — Excel may fail but only option)
+    #
+    # CRITICAL: /rp (password stored) makes the task run in background Session 0.
+    #           NEVER use /rp with a detected user — it defeats the purpose.
+    #           /rp is ONLY for the admin-headless fallback when no user is present.
+
     create_attempts = []
-    if is_console_session:
-        create_attempts.append((True, False, False, "interactive /it (console)", None))
-    create_attempts.append((False, True, False, "headless/admin", configured_ru))
+    if detected_user and is_console_session:
+        # Physical console — /it fires in their desktop session
+        create_attempts.append((True, False, False, "console /it", ru_user))
+    if detected_user and not is_console_session:
+        # RDP session — no /it, no /rp → Task Scheduler fires in their existing RDP session
+        create_attempts.append((False, False, False, "RDP session (no /rp)", ru_user))
+    # Admin headless as final fallback (no detected user, or all above fail)
+    create_attempts.append((False, True, False, "admin headless", configured_ru))
 
     task_created = False
     used_label = ""
@@ -1393,47 +1305,51 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
         return False
 
     # ── Step 4: Verify task actually started ──
-    # schtasks /run returns 0 even when /it has no interactive session.
-    # Task stays in 'Ready' and never fires. Detect this and retry.
-    # SYSTEM fallback REMOVED: SYSTEM has no desktop and cannot open Excel.
+    # /it tasks get stuck in Ready if user is not on console.
+    # Detect this and progress through the fallback chain.
     time.sleep(3)
     if not _task_is_running():
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                  f"Task stuck in Ready on {hostname} "
-                  f"(created as [{used_label}], no interactive session for '{ru_user}'). "
-                  f"Retrying headless...")
+                  f"Task stuck in Ready on {hostname} (created as [{used_label}]). "
+                  f"Trying next fallback...")
         try:
             subprocess.run(_build_delete(), capture_output=True, timeout=10)
         except:
             pass
 
-        # Only retry headless if we haven't already tried it
-        # CRITICAL: always use configured_ru (admin) for headless — their password is known.
-        # Never use detected user (vishnu.kumar etc.) for headless — we don't have their password.
-        if used_label == "interactive /it":
-            create = _build_create(False, True, False, configured_ru)  # always admin + /rp
+        # Build remaining fallbacks not yet tried
+        remaining = []
+        if used_label == "console /it" and detected_user:
+            # /it failed (not console) → try RDP no-/rp
+            remaining.append((False, False, False, "RDP session (no /rp)", ru_user))
+        if used_label in ("console /it", "RDP session (no /rp)"):
+            # Both user-session attempts failed → admin headless as last resort
+            remaining.append((False, True, False, "admin headless", configured_ru))
+
+        for with_it, with_pw, as_system, label, ru_ov in remaining:
+            create = _build_create(with_it, with_pw, as_system, ru_ov)
             r = subprocess.run(create, capture_output=True, text=True, timeout=30)
             if r.returncode == 0:
                 r2 = subprocess.run(_build_run(), capture_output=True, text=True, timeout=15)
                 if r2.returncode == 0:
                     time.sleep(3)
                     if _task_is_running():
+                        actual = ru_ov if ru_ov else ru_user
                         D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                                  f"Task running [headless as '{configured_ru}'] on {hostname}")
+                                  f"Task running [{label}] on {hostname} as '{actual}'")
                         return True
                     D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                              f"[headless retry] also stuck in Ready on {hostname}")
+                              f"[{label}] also stuck in Ready on {hostname}")
             else:
                 err = (r.stderr.strip() or r.stdout.strip())[:200]
                 D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
-                          f"Headless retry failed: {err}")
+                          f"[{label}] create failed: {err}")
 
         D.add_log(jid, qid, mid, "ERROR", "SCHTASKS",
                   f"{hostname}: task not running after all attempts. "
-                  f"Excel requires an interactive user session — SYSTEM cannot open Excel. "
-                  f"FIX: ensure a user is logged in on {hostname}. "
-                  f"Enable Windows services: Remote Desktop Services, Remote Registry, Task Scheduler. "
-                  f"Firewall: allow Remote Scheduled Tasks Management.")
+                  f"FIX: ensure '{ru_user}' is logged in on {hostname}. "
+                  f"Enable: Remote Desktop Services, Remote Registry, Task Scheduler service. "
+                  f"Firewall: allow 'Remote Scheduled Tasks Management'.")
         return False
 
     D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
