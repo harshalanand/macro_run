@@ -22,18 +22,76 @@ app = FastAPI(title="Macro Orchestrator")
 app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
 tpl = Jinja2Templates(directory=os.path.join(BASE, "templates"))
 D.init_db()
-# On startup, fix any jobs stuck as RUNNING from a previous server crash/restart
-# (nothing is running in memory yet, so all DB-RUNNING jobs are stale)
 D.fix_stale_running_jobs(set())
 
 import sys
 if "--reload" in sys.argv or any("--reload" in str(a) for a in sys.argv):
     print("\n" + "="*60)
     print("  WARNING: --reload WILL CRASH running jobs!")
-    print("  Every DB write triggers a server restart.")
     print("  Use: uvicorn main:app --host 0.0.0.0 --port 8000")
-    print("  Or:  run.bat")
     print("="*60 + "\n")
+
+# ── BACKGROUND HEALTH MONITOR ─────────────────────────────────────────────
+# Checks every machine in Master every 10 minutes.
+# Uses a fast ICMP-style ping first, then SMB auth, to determine ON/OFF.
+
+def _health_monitor_loop():
+    """Background thread: re-checks all master machines every 10 minutes."""
+    import time as _time
+    _time.sleep(30)   # wait 30s after startup before first check
+    while True:
+        try:
+            machines = D.get_master_machines()
+            for m in machines:
+                try:
+                    m = dict(m)
+                    hostname = (m.get("system_name") or m.get("ip_address") or "").strip()
+                    if not hostname:
+                        D.update_master_health(m["master_id"], "UNKNOWN", "No hostname/IP configured")
+                        continue
+                    # Fast reachability check via ping (1 packet, 1s timeout)
+                    ping = subprocess.run(
+                        ["ping", "-n", "1", "-w", "1000", hostname],
+                        capture_output=True, timeout=5)
+                    if ping.returncode != 0:
+                        D.update_master_health(m["master_id"], "OFFLINE",
+                                               f"Ping failed — {hostname} is unreachable or powered off")
+                        continue
+                    # Machine is reachable — do a quick share access check
+                    shared = (m.get("shared_folder") or "").strip()
+                    username = (m.get("username") or "").strip()
+                    password = (m.get("password") or "").strip()
+                    if shared and username and password:
+                        auth_ok = E._net_use_auth(shared, username, password)
+                        if auth_ok:
+                            # Also detect current user for display
+                            detected = E._get_active_session_user(hostname, username, password)
+                            active = detected.split("\\")[-1] if detected else ""
+                            if active:
+                                D.update_master_active_user(m["machine_name"], active)
+                            D.update_master_health(m["master_id"], "OK",
+                                                   f"Online | {hostname} reachable | share accessible"
+                                                   + (f" | user: {active}" if active else ""))
+                        else:
+                            D.update_master_health(m["master_id"], "PARTIAL",
+                                                   f"Online (ping OK) but share auth failed — check credentials")
+                    else:
+                        D.update_master_health(m["master_id"], "PARTIAL",
+                                               f"Online (ping OK) | no share configured for auth test")
+                except Exception as e:
+                    try:
+                        D.update_master_health(m["master_id"], "FAIL", f"Health check error: {e}")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        _time.sleep(600)   # 10 minutes
+
+
+import threading as _threading
+_health_thread = _threading.Thread(target=_health_monitor_loop, daemon=True)
+_health_thread.start()
+
 
 # ── PAGES ───────────────────────────────────────────────────────────────────
 
@@ -189,12 +247,41 @@ async def check_master_health(mid: int):
     D.update_master_health(mid, status, detail)
     return JSONResponse({"status": status, "results": [{"step": r[0], "ok": r[1], "msg": r[2]} for r in results]})
 
+@app.get("/api/machines/status")
+async def machines_live_status():
+    """Return current health/online status of all master machines for dashboard polling."""
+    machines = D.get_master_machines()
+    return JSONResponse([{
+        "id": m["master_id"],
+        "name": m["machine_name"],
+        "status": m["health_status"] or "UNKNOWN",
+        "detail": m["health_detail"] or "",
+        "checked": m["health_checked_at"] or "",
+        "last_seen": m["last_seen_at"] or "",
+        "active_user": m["active_user"] or "",
+    } for m in machines])
+
 @app.post("/api/master-machines/health-all")
 async def check_all_health():
+    """Full health check on all machines — ping first (fast OFFLINE detect), then full test."""
+    import subprocess as _sp
     machines = D.get_master_machines()
     results = {}
     for m in machines:
-        res = E.test_machine_dict(dict(m))
+        m = dict(m)
+        mid = m["master_id"]
+        hostname = (m.get("system_name") or m.get("ip_address") or "").strip()
+        # Fast ping first — marks OFFLINE immediately without waiting for SMB timeout
+        if hostname:
+            ping = _sp.run(["ping", "-n", "1", "-w", "1500", hostname],
+                           capture_output=True, timeout=5)
+            if ping.returncode != 0:
+                D.update_master_health(mid, "OFFLINE",
+                                       f"Ping failed — {hostname} is unreachable or powered off")
+                results[mid] = {"status": "OFFLINE", "name": m["machine_name"]}
+                continue
+        # Machine reachable — run full test
+        res = E.test_machine_dict(m)
         ok_count = sum(1 for r in res if r[1])
         critical_fail = any(not r[1] for r in res if r[0] in ("BLOCKED","CONFIG","AUTH","ACCESS","SCHTASKS"))
         if ok_count and not critical_fail:
@@ -204,9 +291,10 @@ async def check_all_health():
         else:
             status = "FAIL"
         detail = " | ".join(f"{'OK' if r[1] else 'FAIL'} {r[0]}: {r[2]}" for r in res)
-        D.update_master_health(m["master_id"], status, detail)
-        results[m["master_id"]] = {"status": status, "name": m["machine_name"]}
+        D.update_master_health(mid, status, detail)
+        results[mid] = {"status": status, "name": m["machine_name"]}
     return JSONResponse(results)
+
 
 @app.post("/api/groups/{gid}/add-from-master")
 async def add_from_master(gid: int, master_ids: str = Form(...)):

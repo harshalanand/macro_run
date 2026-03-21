@@ -619,12 +619,22 @@ def _run_job(jid):
                     # Snapshot folder BEFORE macro runs — so we only copy NEW output
                     pre_snapshot = _snapshot_folder(unc_folder)
 
-                    # Execute via schtasks on target machine
-                    ok = _run_via_schtasks(local_vbs, hostname, username, password,
-                                           task_name, jid, qid, mid, mname,
-                                           interactive=excel_visible)
-                    if not ok:
-                        raise RuntimeError(f"schtasks failed on {hostname}")
+                    # Execute on remote PC — try WMI first (no admin session needed),
+                    # fall back to schtasks if WMI unavailable
+                    wmi_ok, wmi_msg = _run_via_wmi(
+                        local_vbs, hostname, username, password, jid, qid, mid, mname)
+
+                    if wmi_ok:
+                        D.add_log(jid, qid, mid, "INFO", "EXEC",
+                                  f"{mname}: running via WMI (no admin session required)")
+                    else:
+                        D.add_log(jid, qid, mid, "INFO", "EXEC",
+                                  f"{mname}: WMI unavailable ({wmi_msg[:80]}), falling back to schtasks")
+                        ok = _run_via_schtasks(local_vbs, hostname, username, password,
+                                               task_name, jid, qid, mid, mname,
+                                               interactive=excel_visible)
+                        if not ok:
+                            raise RuntimeError(f"Both WMI and schtasks failed on {hostname}")
 
                     # Poll result via UNC
                     timeout_secs = int(D.get_setting("macro_timeout", "1800"))
@@ -1128,9 +1138,46 @@ def _get_active_session_user(hostname, admin_username, admin_password, jid=None,
 
 
 
+def _run_via_wmi(vbs_local_path, hostname, username, password, jid, qid, mid, mname):
+    """
+    Execute VBS via WMI Win32_Process.Create on the remote machine.
+    This is the PREFERRED method when available:
+    - Runs in the currently logged-in user's session automatically
+    - Does NOT require the user to be Administrator
+    - Does NOT need /it flag or session detection
+    - Requires WMI to be accessible (port 135 + dynamic RPC)
+
+    Returns (ok: bool, message: str)
+    """
+    try:
+        cmd = [
+            "wmic", f"/node:{hostname}",
+            f"/user:{username}", f"/password:{password}",
+            "process", "call", "create",
+            f'cscript //NoLogo "{vbs_local_path}"'
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.returncode == 0 and ("ReturnValue = 0" in r.stdout or "ProcessId" in r.stdout):
+            # Extract PID if available
+            pid = ""
+            for line in r.stdout.splitlines():
+                if "ProcessId" in line:
+                    pid = line.strip()
+                    break
+            D.add_log(jid, qid, mid, "INFO", "WMI",
+                      f"{hostname}: process started via WMI {pid}")
+            return True, "WMI"
+        err = (r.stderr.strip() or r.stdout.strip())[:200]
+        return False, err
+    except Exception as e:
+        return False, str(e)
+
+
 def _run_via_schtasks(vbs_local_path, hostname, username, password,
                       task_name, jid, qid, mid, mname, interactive=True):
-    """Create + run scheduled task on the remote machine.
+    """
+    Execute VBS via Windows Task Scheduler on the remote machine.
+    Used as fallback when WMI is not available.
 
     Key fix: schtasks /run returns 0 even when an /it task has no interactive
     session — the task stays in 'Ready' state and never fires. We verify the

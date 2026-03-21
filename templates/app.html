@@ -140,9 +140,10 @@ textarea{resize:vertical;min-height:60px}
 <div class="top"><h2>Machine Master</h2>
 <div class="act">
 {% if import_msg %}<span style="font-size:11px;color:var(--ok)">{{import_msg}}</span>{% endif %}
-<a href="/api/templates/master-machines.csv" class="btn btn-o btn-s">&#8681; Template CSV</a>
-<button class="btn btn-o btn-s" onclick="$('importMasterMo').classList.add('show')">&#8679; Import CSV</button>
-<button class="btn btn-w btn-s" onclick="checkAllHealth()" id="btnCheckAll">&#9889; Check All</button>
+<span id="autoCheckBadge" style="font-size:10.5px;color:var(--tx3)">● auto-check every 10m</span>
+<a href="/api/templates/master-machines.csv" class="btn btn-o btn-s">⬇ Template CSV</a>
+<button class="btn btn-o btn-s" onclick="$('importMasterMo').classList.add('show')">⬆ Import CSV</button>
+<button class="btn btn-w btn-s" onclick="checkAllHealth()" id="btnCheckAll">⚡ Check All Now</button>
 <button class="btn btn-p" onclick="$('addMachMo').classList.add('show')">+ Add Machine</button>
 </div></div>
 <div class="ct">
@@ -152,13 +153,14 @@ textarea{resize:vertical;min-height:60px}
 {% for t in tags %}<a href="/machines?tag={{t}}" class="chip" style="{% if active_tag==t %}background:var(--ac);border-color:var(--ac);color:#fff{% endif %}">{{t}}</a>{% endfor %}
 </div>
 <div class="search-bar">
-<input id="mSearch" type="text" placeholder="&#128269;  Search name, system, IP, dept..." oninput="filterMachines(this.value)">
+<input id="mSearch" type="text" placeholder="🔍  Search name, system, IP, dept..." oninput="filterMachines(this.value)">
 <select id="mHealthFilter" onchange="filterMachines($('mSearch').value)">
-<option value="">All Health</option>
-<option value="OK">OK</option>
-<option value="PARTIAL">Partial</option>
-<option value="FAIL">Fail</option>
-<option value="UNKNOWN">Unknown</option>
+<option value="">All Status</option>
+<option value="OK">● Online</option>
+<option value="OFFLINE">● Offline</option>
+<option value="PARTIAL">◑ Partial</option>
+<option value="FAIL">✗ Fail</option>
+<option value="UNKNOWN">? Unknown</option>
 </select>
 <span id="mCount" style="font-size:11px;color:var(--tx3);white-space:nowrap"></span>
 </div>
@@ -222,20 +224,24 @@ textarea{resize:vertical;min-height:60px}
   {% if m.tags %}{% for t in m.tags.split(',') %}{% if t.strip() %}<span class="chip" style="font-size:10px;padding:2px 5px;margin:1px">{{t.strip()}}</span>{% endif %}{% endfor %}{% endif %}
 </td>
 <td id="health_{{m.master_id}}">
-  {% if m.health_status=='OK' %}<span class="badge b-ok">&#10003; OK</span>
-  {% elif m.health_status=='PARTIAL' %}<span class="badge b-warn">&#9888; Partial</span>
-  {% elif m.health_status=='FAIL' %}<span class="badge b-err">&#10007; Fail</span>
-  {% else %}<span class="badge b-gray">Unknown</span>{% endif %}
+  {% if m.health_status=='OK' %}<span class="badge b-ok">● Online</span>
+  {% elif m.health_status=='OFFLINE' %}<span class="badge b-err">● Offline</span>
+  {% elif m.health_status=='PARTIAL' %}<span class="badge b-warn">◑ Partial</span>
+  {% elif m.health_status=='FAIL' %}<span class="badge b-err">✗ Fail</span>
+  {% else %}<span class="badge b-gray">? Unknown</span>{% endif %}
 </td>
 <td id="issue_{{m.master_id}}" style="font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-    title="{% if m.health_detail %}{{m.health_detail}}{% endif %}">
-  {% if m.health_status in ('FAIL','PARTIAL') and m.health_detail %}
-    <span style="color:var(--err)">
-      {{m.health_detail.split('FAIL ')[1].split('|')[0][:55] if 'FAIL ' in m.health_detail else m.health_detail[:55]}}
-    </span>
+    title="{{m.health_detail or ''}}">
+  {% if m.health_status=='OFFLINE' %}
+    <span style="color:var(--err)">Unreachable — last seen: {{m.last_seen_at[:16] if m.last_seen_at else 'never'}}</span>
+  {% elif m.health_status=='OK' and m.active_user %}
+    <span style="color:var(--ok)">👤 {{m.active_user}}</span>
+    <span style="color:var(--tx3);margin-left:6px">{{m.health_checked_at[11:16] if m.health_checked_at else ''}}</span>
+  {% elif m.health_status in ('FAIL','PARTIAL') and m.health_detail %}
+    <span style="color:var(--warn)">{{m.health_detail[:60]}}</span>
   {% elif m.health_checked_at %}
-    <span style="color:var(--tx3)">{{m.health_checked_at[:16]}}</span>
-  {% else %}<span style="color:var(--tx3)">Not checked</span>{% endif %}
+    <span style="color:var(--tx3)">checked {{m.health_checked_at[11:16]}}</span>
+  {% else %}<span style="color:var(--tx3)">Not checked yet</span>{% endif %}
 </td>
 <td><div class="act-cell">
   <button class="btn btn-o btn-s" onclick="checkHealth({{m.master_id}},'{{m.machine_name|replace("'","\\'")}}')" >Test</button>
@@ -1168,49 +1174,96 @@ async function testMachine(mid,name){
   }catch(e){toast('Error: '+e.message,'fail')}
 }
 
+
+function _healthBadge(status){
+  if(status==='OK')      return '<span class="badge b-ok">● Online</span>';
+  if(status==='OFFLINE') return '<span class="badge b-err">● Offline</span>';
+  if(status==='PARTIAL') return '<span class="badge b-warn">◑ Partial</span>';
+  if(status==='FAIL')    return '<span class="badge b-err">✗ Fail</span>';
+  return '<span class="badge b-gray">? Unknown</span>';
+}
+
 const _healthDetails={};
 async function checkHealth(mid,name){
-  const badge=$('health_'+mid);if(badge) badge.innerHTML='<span class="badge b-blue pulse">Testing...</span>';
-  const issue=$('issue_'+mid);if(issue) issue.innerHTML='<span style="color:var(--tx3)">Running tests...</span>';
-  toast('Checking '+name+'...','info');
+  const badge=$('health_'+mid);if(badge) badge.innerHTML='<span class="badge b-blue pulse">Testing…</span>';
+  const issue=$('issue_'+mid);if(issue) issue.innerHTML='<span style="color:var(--tx3)">Running tests…</span>';
+  toast('Checking '+name+'…','info');
   try{
-    const r=await fetch('/api/master-machines/'+mid+'/health',{method:'POST'});const d=await r.json();
+    const r=await fetch('/api/master-machines/'+mid+'/health',{method:'POST'});
+    const d=await r.json();
     _healthDetails[mid]=d.results;
-    const html=d.status==='OK'?'<span class="badge b-ok">&#10003; OK</span>':d.status==='PARTIAL'?'<span class="badge b-warn">&#9888; Partial</span>':'<span class="badge b-err">&#10007; Fail</span>';
-    if(badge) badge.innerHTML=html;
-    // Update issue cell
+    if(badge) badge.innerHTML=_healthBadge(d.status);
     if(issue){
       const fails=d.results.filter(r=>!r.ok);
       if(fails.length){
         issue.innerHTML='<span style="color:var(--err)" title="'+fails.map(f=>f.step+': '+f.msg).join(' | ')+'">'+fails[0].step+': '+fails[0].msg.substring(0,55)+'</span>';
       }else{
-        const now=new Date().toISOString().slice(0,16);
-        issue.innerHTML='<span style="color:var(--tx3)">'+now+'</span>';
+        issue.innerHTML='<span style="color:var(--tx3)">'+new Date().toTimeString().slice(0,5)+'</span>';
       }
     }
     const row=document.getElementById('mrow_'+mid);if(row) row.dataset.health=d.status;
-    toast(name+' \u2192 '+d.status,d.status==='OK'?'ok':d.status==='PARTIAL'?'info':'fail');
+    toast(name+' → '+d.status, d.status==='OK'?'ok':d.status==='PARTIAL'?'info':'fail');
   }catch(e){toast('Error: '+e.message,'fail')}
 }
 
 async function checkAllHealth(){
-  const btn=$('btnCheckAll');if(btn){btn.textContent='Checking...';btn.disabled=true}
-  toast('Checking all machines...','info');
+  const btn=$('btnCheckAll');if(btn){btn.textContent='Checking…';btn.disabled=true}
+  toast('Checking all machines…','info');
   try{
-    const r=await fetch('/api/master-machines/health-all',{method:'POST'});const d=await r.json();
-    let ok=0,fail=0;
+    const r=await fetch('/api/master-machines/health-all',{method:'POST'});
+    const d=await r.json();
+    let ok=0,offline=0,fail=0;
     for(const [mid,res] of Object.entries(d)){
       const badge=$('health_'+mid);
-      if(badge) badge.innerHTML=res.status==='OK'?'<span class="badge b-ok">&#10003; OK</span>':res.status==='PARTIAL'?'<span class="badge b-warn">&#9888; Partial</span>':'<span class="badge b-err">&#10007; Fail</span>';
+      if(badge) badge.innerHTML=_healthBadge(res.status);
       const row=document.getElementById('mrow_'+mid);if(row) row.dataset.health=res.status;
-      if(res.status==='OK')ok++;else fail++;
+      if(res.status==='OK')ok++;else if(res.status==='OFFLINE')offline++;else fail++;
     }
-    toast('Done: '+ok+' OK, '+fail+' issues',fail>0?'fail':'ok');
-    // Reload after short delay so issue column refreshes from DB
+    toast('Done: '+ok+' online, '+offline+' offline, '+fail+' errors',
+          (offline+fail)>0?'fail':'ok');
     setTimeout(()=>location.reload(),2500);
   }catch(e){toast('Error: '+e.message,'fail')}
-  finally{if(btn){btn.textContent='&#9889; Check All';btn.disabled=false}}
+  finally{if(btn){btn.textContent='⚡ Check All Now';btn.disabled=false}}
 }
+
+// Live status poll — updates badges silently every 30s on machines page
+function _startLiveStatusPoll(){
+  async function poll(){
+    try{
+      const r=await fetch('/api/machines/status');
+      const machines=await r.json();
+      const now=new Date().toTimeString().slice(0,5);
+      let online=0,offline=0;
+      machines.forEach(m=>{
+        const badge=$('health_'+m.id);
+        if(badge) badge.innerHTML=_healthBadge(m.status);
+        const row=document.getElementById('mrow_'+m.id);
+        if(row) row.dataset.health=m.status;
+        const issue=$('issue_'+m.id);
+        if(issue){
+          if(m.status==='OFFLINE'){
+            const ls=m.last_seen?m.last_seen.slice(11,16):'never';
+            issue.innerHTML='<span style="color:var(--err)">● Offline — last seen '+ls+'</span>';
+          }else if(m.status==='OK'&&m.active_user){
+            issue.innerHTML='<span style="color:var(--ok)">👤 '+m.active_user+'</span> <span style="color:var(--tx3)">'+now+'</span>';
+          }else if(m.status==='OK'){
+            issue.innerHTML='<span style="color:var(--tx3)">'+now+'</span>';
+          }
+        }
+        if(m.status==='OK'||m.status==='PARTIAL') online++;
+        else if(m.status==='OFFLINE') offline++;
+      });
+      const badge=$('autoCheckBadge');
+      if(badge) badge.textContent='● '+online+' online, '+offline+' offline — auto '+now;
+      badge && (badge.style.color = offline>0?'var(--err)':'var(--tx3)');
+    }catch(e){}
+    setTimeout(poll,30000);
+  }
+  setTimeout(poll,3000);  // first check 3s after page load
+}
+
+if(document.getElementById('autoCheckBadge')) _startLiveStatusPoll();
+
 
 function viewDetail(mid,name){
   $('detailTitle').textContent='Health: '+name;

@@ -196,6 +196,10 @@ def init_db():
             c.execute("SELECT active_user FROM machine_master LIMIT 1")
         except:
             c.execute("ALTER TABLE machine_master ADD COLUMN active_user TEXT DEFAULT ''")
+        try:
+            c.execute("SELECT last_seen_at FROM machine_master LIMIT 1")
+        except:
+            c.execute("ALTER TABLE machine_master ADD COLUMN last_seen_at TIMESTAMP")
 
 
         # Migration: make job_queue.cat_id nullable (was NOT NULL — blocked category deletes)
@@ -325,10 +329,18 @@ def delete_master_machine(mid):
         c.execute("DELETE FROM machine_master WHERE master_id=?", (mid,))
 
 def update_master_health(mid, status, detail=""):
+    now = datetime.now().isoformat()
     with db() as c:
-        c.execute("""UPDATE machine_master SET health_status=?,health_checked_at=?,health_detail=?
-                     WHERE master_id=?""",
-                  (status, datetime.now().isoformat(), detail[:1000], mid))
+        if status in ("OK", "PARTIAL"):
+            c.execute("""UPDATE machine_master
+                         SET health_status=?, health_checked_at=?, health_detail=?, last_seen_at=?
+                         WHERE master_id=?""",
+                      (status, now, detail[:1000], now, mid))
+        else:
+            c.execute("""UPDATE machine_master
+                         SET health_status=?, health_checked_at=?, health_detail=?
+                         WHERE master_id=?""",
+                      (status, now, detail[:1000], mid))
 
 def sync_health_to_master(machine_name, status, detail=""):
     """Sync health status from a group machine test back to master record."""
