@@ -206,38 +206,55 @@ def _run_test_job(gid):
             # Step 6: Create + trigger schtask
             task_name = "MQ_TEST_{}_{}".format(gid, mid)
             task_cmd = 'cscript //NoLogo "{}"'.format(local_vbs)
-            plain_ru = ru_user
 
-            # Key rule: only use /it if we actually detected an active session.
-            # /it with no session = task created OK, triggered OK, but silently never runs.
-            attempts = []
-            if detected:
-                attempts.append((True,  False, "interactive /it"))   # user session exists
-            attempts.append((False, not bool(detected), "headless")) # always include as fallback
+            # /ru user strategy:
+            # - If session detected: run as that user with /it (their interactive session)
+            # - Headless fallback: ALWAYS run as the configured admin (username) whose
+            #   password we know. Never use /rp with a detected user's name since we
+            #   don't know their personal password.
+            admin_ru = username.split("\\")[-1] if "\\" in username else username
 
-            created = False
-            used_mode = ""
-            last_err = ""
-            for use_it, use_rp, mode_label in attempts:
-                create_cmd = [
+            # Use a future start time to avoid "/ST is earlier than current time" warning
+            import datetime as _dt
+            st_time = (_dt.datetime.now() + _dt.timedelta(minutes=1)).strftime("%H:%M")
+
+            def _make_create(ru, use_it, use_rp):
+                cmd = [
                     "schtasks", "/create", "/s", hostname,
                     "/u", username, "/p", password,
                     "/tn", task_name, "/tr", task_cmd,
-                    "/sc", "once", "/st", "00:00", "/f", "/rl", "highest",
-                    "/ru", plain_ru
+                    "/sc", "once", "/st", st_time, "/f", "/rl", "highest",
+                    "/ru", ru
                 ]
                 if use_rp:
-                    create_cmd += ["/rp", password]
+                    cmd += ["/rp", password]
                 if use_it:
-                    create_cmd.append("/it")
-                r = subprocess.run(create_cmd, capture_output=True, text=True, timeout=30)
+                    cmd.append("/it")
+                return cmd
+
+            # Attempt 1: if session detected, try /it with detected user
+            # Attempt 2: headless as configured admin (password always known)
+            attempts = []
+            if detected:
+                attempts.append((detected.split("\\")[-1].strip(), True,  False, "interactive /it"))
+            attempts.append((admin_ru, False, True, "headless as admin"))
+
+            created = False
+            used_mode = ""
+            used_ru = admin_ru
+            last_err = ""
+            for ru, use_it, use_rp, mode_label in attempts:
+                r = subprocess.run(_make_create(ru, use_it, use_rp),
+                                   capture_output=True, text=True, timeout=30)
                 if r.returncode == 0:
                     log(mid, mname, "SCHTASKS", True,
-                        "Task created [{}] on {} as '{}'".format(mode_label, hostname, plain_ru))
+                        "Task created [{}] on {} as '{}'".format(mode_label, hostname, ru))
                     created = True
                     used_mode = mode_label
+                    used_ru = ru
                     break
                 last_err = (r.stderr.strip() or r.stdout.strip())[:200]
+                # Ignore pure warnings (returncode=0 means success despite warning text)
 
             if not created:
                 log(mid, mname, "SCHTASKS", False,
@@ -256,7 +273,6 @@ def _run_test_job(gid):
                 return
 
             # Verify task is actually Running (not stuck in Ready)
-            # schtasks /run returns 0 even when /it has no active session
             time.sleep(3)
             try:
                 qcmd = ["schtasks", "/query", "/s", hostname, "/u", username, "/p", password,
@@ -264,35 +280,29 @@ def _run_test_job(gid):
                 qr = subprocess.run(qcmd, capture_output=True, text=True, timeout=15)
                 task_actually_running = qr.returncode == 0 and "Running" in qr.stdout
             except Exception:
-                task_actually_running = True  # can't query, assume OK
+                task_actually_running = True  # can't query → assume running
 
-            if not task_actually_running and used_mode == "interactive /it":
-                # Stuck in Ready — /it has no session. Delete and retry headless.
+            if not task_actually_running and "interactive" in used_mode:
+                # Stuck in Ready — detected user has no active session right now.
+                # Delete and retry as admin (headless) — we always know their password.
                 log(mid, mname, "SCHTASKS", False,
                     "Task stuck in Ready on {} — '{}' has no interactive session. "
-                    "Retrying headless (no /it)…".format(hostname, plain_ru))
+                    "Retrying headless as admin '{}'…".format(hostname, used_ru, admin_ru))
                 try:
                     subprocess.run(
                         ["schtasks", "/delete", "/s", hostname, "/u", username, "/p", password,
-                         "/tn", task_name, "/f"],
-                        capture_output=True, timeout=10)
+                         "/tn", task_name, "/f"], capture_output=True, timeout=10)
                 except Exception:
                     pass
 
-                # Headless retry
-                create_hl = [
-                    "schtasks", "/create", "/s", hostname,
-                    "/u", username, "/p", password,
-                    "/tn", task_name, "/tr", task_cmd,
-                    "/sc", "once", "/st", "00:00", "/f", "/rl", "highest",
-                    "/ru", plain_ru, "/rp", password
-                ]
-                rhl = subprocess.run(create_hl, capture_output=True, text=True, timeout=30)
+                rhl = subprocess.run(_make_create(admin_ru, False, True),
+                                     capture_output=True, text=True, timeout=30)
                 if rhl.returncode != 0:
                     err = (rhl.stderr.strip() or rhl.stdout.strip())[:200]
                     log(mid, mname, "SCHTASKS", False,
-                        "Headless retry also failed: {}. "
-                        "Check firewall: allow 'Remote Scheduled Tasks Management' on {}.".format(err, hostname))
+                        "Headless as admin also failed: {}. "
+                        "Fix: ensure firewall allows 'Remote Scheduled Tasks Management' on {}.".format(
+                            err, hostname))
                     _cleanup_test(unc_folder, task_name, hostname, username, password)
                     return
 
@@ -303,7 +313,7 @@ def _run_test_job(gid):
                     _cleanup_test(unc_folder, task_name, hostname, username, password)
                     return
                 log(mid, mname, "SCHTASKS", True,
-                    "Task now running [headless] on {} as '{}'".format(hostname, plain_ru))
+                    "Task now running [headless/admin] on {}".format(hostname))
             else:
                 log(mid, mname, "SCHTASKS", True,
                     "Task confirmed running on {} [{}]".format(hostname, used_mode))
@@ -1223,14 +1233,20 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
             return []
         return ["/s", hostname, "/u", username, "/p", password]
 
-    def _build_create(with_interactive, with_password, run_as_system=False):
+    def _st_time():
+        """Use a time 1 minute in the future to avoid '/ST is earlier than current time' warning."""
+        from datetime import datetime as _dt, timedelta as _td
+        return (_dt.now() + _td(minutes=1)).strftime("%H:%M")
+
+    def _build_create(with_interactive, with_password, run_as_system=False, ru_override=None):
+        ru = ru_override if ru_override else ru_user
         cmd = ["schtasks", "/create"] + _schtasks_base()
         cmd += ["/tn", task_name, "/tr", task_cmd,
-                "/sc", "once", "/st", "00:00", "/f", "/rl", "highest"]
+                "/sc", "once", "/st", _st_time(), "/f", "/rl", "highest"]
         if run_as_system:
-            cmd += ["/ru", "SYSTEM"]          # always fires, no session needed
+            cmd += ["/ru", "SYSTEM"]
         else:
-            cmd += ["/ru", ru_user]
+            cmd += ["/ru", ru]
             if with_password:
                 cmd += ["/rp", password]
             if with_interactive:
@@ -1250,10 +1266,7 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
                   ["/tn", task_name, "/fo", "csv", "/nh"]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if r.returncode == 0:
-                status_line = r.stdout.strip()
-                # CSV format: "TaskName","Next Run","Status"
-                # Status values: Running, Ready, Disabled, etc.
-                return "Running" in status_line
+                return "Running" in r.stdout
         except:
             pass
         return False
@@ -1262,24 +1275,26 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
               f"Scheduling task on {hostname} ({mode}) ru='{ru_user}'")
 
     # ── Step 2: Attempt order ──
-    # 1. Detected/configured user + /it   (interactive, preferred — Excel visible)
-    # 2. Detected/configured user, no /it  (headless — runs even without interactive session)
-    # NOTE: SYSTEM fallback REMOVED — SYSTEM has no desktop and cannot open Excel.
+    # 1. Detected/configured user + /it  (interactive, user has desktop session)
+    # 2. Configured admin, no /it        (headless — admin password always known)
+    # Key: headless fallback ALWAYS uses configured_ru (whose password we know),
+    #      never the detected user (we don't know their personal password).
     create_attempts = [
-        (True,  use_password, False, "interactive /it"),
-        (False, use_password, False, "headless (no /it)"),
+        (True,  use_password, False, "interactive /it", None),
+        (False, True,         False, "headless/admin",  configured_ru),
     ]
 
     task_created = False
     used_label = ""
-    for with_it, with_pw, as_system, label in create_attempts:
-        create = _build_create(with_it, with_pw, as_system)
+    for with_it, with_pw, as_system, label, ru_ov in create_attempts:
+        create = _build_create(with_it, with_pw, as_system, ru_ov)
         r = subprocess.run(create, capture_output=True, text=True, timeout=30)
         if r.returncode == 0:
             task_created = True
             used_label = label
+            actual_ru = ru_ov if ru_ov else ru_user
             D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                      f"Task created [{label}] on {hostname}")
+                      f"Task created [{label}] on {hostname} as '{actual_ru}'")
             break
         err = (r.stderr.strip() or r.stdout.strip())[:200]
         D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
@@ -1317,8 +1332,10 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
             pass
 
         # Only retry headless if we haven't already tried it
+        # CRITICAL: always use configured_ru (admin) for headless — their password is known.
+        # Never use detected user (vishnu.kumar etc.) for headless — we don't have their password.
         if used_label == "interactive /it":
-            create = _build_create(False, use_password, False)
+            create = _build_create(False, True, False, configured_ru)  # always admin + /rp
             r = subprocess.run(create, capture_output=True, text=True, timeout=30)
             if r.returncode == 0:
                 r2 = subprocess.run(_build_run(), capture_output=True, text=True, timeout=15)
@@ -1326,13 +1343,14 @@ def _run_via_schtasks(vbs_local_path, hostname, username, password,
                     time.sleep(3)
                     if _task_is_running():
                         D.add_log(jid, qid, mid, "INFO", "SCHTASKS",
-                                  f"Task running [headless retry] on {hostname}")
+                                  f"Task running [headless as '{configured_ru}'] on {hostname}")
                         return True
                     D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
                               f"[headless retry] also stuck in Ready on {hostname}")
             else:
                 err = (r.stderr.strip() or r.stdout.strip())[:200]
-                D.add_log(jid, qid, mid, "WARN", "SCHTASKS", f"Headless retry create failed: {err}")
+                D.add_log(jid, qid, mid, "WARN", "SCHTASKS",
+                          f"Headless retry failed: {err}")
 
         D.add_log(jid, qid, mid, "ERROR", "SCHTASKS",
                   f"{hostname}: task not running after all attempts. "

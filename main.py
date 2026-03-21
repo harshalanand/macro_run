@@ -1,7 +1,7 @@
 """
 FastAPI -- Macro Orchestrator with queue-based execution, CSV templates, test mail.
 """
-import os, io, csv, json, shutil
+import os, io, csv, json, shutil, subprocess
 from datetime import datetime
 from typing import Optional
 
@@ -540,7 +540,11 @@ async def get_test_job_results(gid: int):
     rows = [r for r in results if not r.get("done")]
     return JSONResponse({"running": not done, "done": done, "results": rows})
 
-async def run_job(gid: int):
+@app.get("/api/groups/{gid}/run", response_class=HTMLResponse)
+async def run_job_get(gid: int):
+    """Redirect GET requests to the group page — Run Job requires POST (form submit)."""
+    return RedirectResponse(f"/groups/{gid}", 303)
+
     g = D.get_group(gid)
     if not g: raise HTTPException(404)
     # ONE JOB PER GROUP: block if any job is already running for this group
